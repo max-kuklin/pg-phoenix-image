@@ -4,7 +4,11 @@
   <img src="assets/logo.png" alt="pg-phoenix-image logo" width="300">
 </p>
 
-Custom PostgreSQL Docker image based on `postgres:18` (Debian), built for Kubernetes. Includes automated backups, point-in-time recovery, safe major-version upgrades, and spot-instance optimizations. Fully tested.
+Custom PostgreSQL Docker image based on postgres:18 (Debian), built to rise again — automatically and quickly recover on Kubernetes with spot-instance nodes. Ships with simple operational scripts for automated WAL-G backups, point-in-time recovery, and safe major-version upgrades. Fully e2e tested.
+
+Born after 5+ years of running PostgreSQL on Kubernetes+Istio with Patroni/Spilo and a desire for simpler, more reliable operations.
+
+> **Note**: This is a work in progress. Not in usable state yet.
 
 ## Features
 
@@ -15,7 +19,7 @@ Custom PostgreSQL Docker image based on `postgres:18` (Debian), built for Kubern
 - **Prometheus Metrics** — `pg_stat_statements` + postgres_exporter sidecar support
 - **Slow Query Log** — log queries exceeding a configurable duration threshold
 - **Spot Instance Optimized** — fast shutdown, instant startup, no cold downloads (deployment-level, see `docs/deployment.md`)
-- **Complete Test Suite** — integration tests for every feature above (Node.js + Testcontainers)
+- **Complete Test Suite** — e2e integration tests for every feature above (Node.js + Testcontainers)
 
 ## Project Structure
 
