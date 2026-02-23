@@ -8,7 +8,8 @@ Custom PostgreSQL Docker image based on postgres:18 (Debian), built to rise agai
 
 Born after 5+ years of running PostgreSQL on Kubernetes+Istio with Patroni/Spilo and a desire for simpler, more reliable operations.
 
-> **Note**: This is a work in progress. Not in usable state yet.
+> [!CAUTION]
+> This is a work in progress. Not in usable state yet.
 
 ## Features
 
