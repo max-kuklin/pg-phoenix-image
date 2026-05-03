@@ -37,6 +37,9 @@ jobs:
       - name: Build image
         run: docker build -t pg-phoenix-image:test .
 
+      - name: Run image smoke tests
+        run: npm test -- tests/pg-only.test.js
+
       - name: Smoke test image
         shell: bash
         run: |
@@ -82,4 +85,3 @@ jobs:
           docker exec "$name" test -x /usr/local/bin/backup.sh
           docker exec "$name" test -x /usr/local/bin/restore.sh
           docker exec "$name" test -x /usr/local/bin/upgrade.sh
-
