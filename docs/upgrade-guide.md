@@ -113,7 +113,7 @@ kubectl exec -n db pg-phoenix-image-0 -- wal-g backup-list
 | When you notice | What to do |
 |---|---|
 | **During upgrade** (pod logs show failure) | Automatic — data rolled back, container exits. Revert image to `pg-phoenix-image:18-latest`, remove `PG_UPGRADE`, redeploy. |
-| **After upgrade** (app breaks on PG 19) | Revert image to `pg-phoenix-image:18-latest`, remove `PG_UPGRADE`, redeploy. If PG 19 already wrote data, also run `restore.sh` from the pre-upgrade backup on the `.../18` prefix. See [restore-runbook.md](restore-runbook.md). |
+| **After upgrade** (app breaks on PG 19) | Revert image to `pg-phoenix-image:18-latest`, remove `PG_UPGRADE`, and request startup restore from the pre-upgrade backup on the `.../18` prefix. See [restore-runbook.md](restore-runbook.md). |
 
 ### Testing in Non-Production
 

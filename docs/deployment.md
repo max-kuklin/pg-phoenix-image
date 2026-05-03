@@ -162,6 +162,7 @@ Mount into `conf.d/` — see the commented-out volume mount in the StatefulSet a
 
 - **Storage class**: use `WaitForFirstConsumer` binding mode to co-locate PVC and pod in the same AZ.
 - **Reclaim policy**: use `Retain` for production to protect against accidental PVC deletion.
+- **Mount path**: mount the PVC at `/var/lib/postgresql`, not directly at PGDATA. Restore and major upgrade flows need sibling directories beside PGDATA on the same filesystem.
 - **Sizing**: PG data + WAL + logs. Start with 2-3x expected data size. Monitor with `pg_database_size()`.
 
 ## Spot Instances

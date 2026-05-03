@@ -1,124 +1,143 @@
 # Restore Runbook
 
-Three procedures, same tool. Pick the one matching your scenario. For design rationale and failure mode details, see [architecture/restore.md](architecture/restore.md).
+Restore is requested through environment variables and runs during pod startup. Do not run `restore.sh` manually in a live PostgreSQL pod; stopping PostgreSQL inside the container terminates the container lifecycle.
+
+For design rationale and failure modes, see [architecture/restore.md](architecture/restore.md).
 
 ## Pre-Flight Checklist
 
-Before any restore:
+- [ ] Confirm the target backup exists with `wal-g backup-list`.
+- [ ] Confirm WAL continuity to the target time with `wal-g wal-verify integrity`.
+- [ ] Confirm the PVC is mounted at `/var/lib/postgresql`.
+- [ ] Confirm PVC headroom. Restoring over existing data can temporarily require current PGDATA, fetched data, and `pre-restore` to coexist.
+- [ ] Choose a unique `PG_RESTORE_REQUEST_ID`. Keep it stable while retrying the same request; change it for a new restore.
+- [ ] Stop application writes or route traffic away before restarting the pod.
 
-- [ ] Confirm the target backup exists: `wal-g backup-list`
-- [ ] Confirm WAL continuity to your target time: `wal-g wal-verify integrity`
-- [ ] Ensure PVC has 2x free space (pre-restore snapshot temporarily doubles usage)
-- [ ] Notify stakeholders — PG will be unavailable during restore
+## Restore to Latest
 
-## Procedure 1: Disaster Recovery (Restore to Latest)
+Set restore env vars on the StatefulSet:
 
-Recover to the most recent available state. Use when data is lost or corrupted.
-
-```bash
-# Exec into the pod
-kubectl exec -it -n db pg-phoenix-image-0 -- sh
-
-# Run restore — PG will stop, restore, replay all WAL, and restart
-restore.sh
+```yaml
+env:
+  - name: PG_RESTORE
+    value: "true"
+  - name: PG_RESTORE_REQUEST_ID
+    value: "incident-2026-05-03-latest"
+  - name: PG_RESTORE_OVERWRITE
+    value: "true"
 ```
 
-`restore.sh` handles everything: stop PG → snapshot PGDATA → fetch backup → replay WAL → start PG → clean up. If anything fails, it rolls back and restarts PG on the old data.
+Apply the manifest and restart the pod. The entrypoint fetches the latest backup from the instance's active WAL-G prefix, keeps the previous data directory as `pre-restore`, then starts PostgreSQL for WAL replay and promotion.
 
-### Verify
+After validation, remove `PG_RESTORE` and `PG_RESTORE_OVERWRITE` from the manifest and restart during the next controlled maintenance window.
 
-```bash
-# PG is running
-pg_isready -U postgres
+## Point-In-Time Recovery
 
-# Check data
-psql -U postgres -c "SELECT count(*) FROM <your_table>;"
+Use the same startup flow with a target time:
+
+```yaml
+env:
+  - name: PG_RESTORE
+    value: "true"
+  - name: PG_RESTORE_REQUEST_ID
+    value: "incident-2026-05-03-pitr-1430"
+  - name: PG_RESTORE_OVERWRITE
+    value: "true"
+  - name: PG_RESTORE_TARGET_TIME
+    value: "2026-02-13 14:30:00 UTC"
 ```
 
-## Procedure 2: Point-in-Time Recovery
+The target time must be between the oldest usable base backup and the latest archived WAL needed for that point.
 
-Recover to a specific timestamp. Use after accidental `DROP TABLE`, bad migration, or data corruption at a known time.
+## Clone from Another Instance
 
-```bash
-kubectl exec -it -n db pg-phoenix-image-0 -- sh
-
-# Restore to a specific time (UTC)
-restore.sh --target-time "2026-02-13 14:30:00 UTC"
-```
-
-PG replays WAL up to the target time and stops there. Transactions after that timestamp are discarded.
-
-### Finding the Right Timestamp
-
-```bash
-# Check PG logs for when the bad event happened
-cat /var/lib/postgresql/data/log/postgresql-$(date +%a).log | grep "DROP\|DELETE\|TRUNCATE"
-
-# Or check backup coverage
-wal-g backup-list
-```
-
-The target time must be between the oldest backup's start time and the latest archived WAL.
-
-### Verify
-
-```bash
-psql -U postgres -c "SELECT max(created_at) FROM <your_table>;"
-# Should be ≤ your target time
-```
-
-## Procedure 3: Clone from Another Instance
-
-Create a new instance pre-loaded from another instance's backups. Use for staging refresh, migration, or cross-region DR.
-
-### Option A: Via Manifest (Recommended)
-
-Set these env vars on a **new** StatefulSet with an **empty PVC**:
+For a new StatefulSet with an empty PVC:
 
 ```yaml
 env:
   - name: WALG_CLONE_FROM
-    value: "s3://bucket/source-instance/18"  # full version-scoped prefix
-  # Optional: clone to a specific point in time
+    value: "s3://bucket/source-instance/18"
   - name: WALG_CLONE_TARGET_TIME
     value: "2026-02-12 09:00:00 UTC"
+  - name: WALG_S3_PREFIX
+    value: "s3://bucket/new-instance"
 ```
 
-Deploy. The entrypoint detects empty PGDATA + `WALG_CLONE_FROM` and restores automatically. After first successful boot, remove `WALG_CLONE_FROM` from the manifest to avoid confusion.
+`WALG_CLONE_FROM` must include the source PostgreSQL major suffix. `WALG_S3_PREFIX` remains the destination instance's own backup prefix; after startup, backups are written under the destination prefix with the current major suffix appended by the image.
 
-`WALG_CLONE_FROM` must be the full version-scoped path — see [architecture/backup.md](architecture/backup.md) for the prefix layout.
+Remove `WALG_CLONE_FROM` and `WALG_CLONE_TARGET_TIME` after the clone has booted successfully.
 
-### Option B: Manual
+## Cross-Instance Restore Over Existing Data
+
+Use `PG_RESTORE_FROM` when replacing an existing PVC from a source prefix:
+
+```yaml
+env:
+  - name: PG_RESTORE
+    value: "true"
+  - name: PG_RESTORE_REQUEST_ID
+    value: "incident-2026-05-03-cross-instance"
+  - name: PG_RESTORE_FROM
+    value: "s3://bucket/source-instance/18"
+  - name: PG_RESTORE_OVERWRITE
+    value: "true"
+```
+
+This reads from the source prefix for restore only. The instance continues archiving to its configured `WALG_S3_PREFIX` after PostgreSQL starts.
+
+## Verify
+
+Watch startup logs:
 
 ```bash
-kubectl exec -it -n db pg-phoenix-image-new-0 -- sh
-
-restore.sh --from "s3://bucket/source-instance/18"
-# Or with PITR:
-restore.sh --from "s3://bucket/source-instance/18" --target-time "2026-02-11 18:45:00 UTC"
+kubectl logs -f -n db pg-phoenix-image-0
 ```
 
-The `--from` path must be the full version-scoped prefix (note the `/18` suffix) — see [architecture/backup.md](architecture/backup.md) for the prefix layout.
+Check PostgreSQL and application-level data:
 
-### Post-Clone Checklist
+```bash
+kubectl exec -n db pg-phoenix-image-0 -- pg_isready -U postgres
+kubectl exec -n db pg-phoenix-image-0 -- psql -U postgres -c "SELECT count(*) FROM <your_table>;"
+```
 
-- [ ] Change `WALG_S3_PREFIX` to point to the new instance's own backup path (not the source's)
-- [ ] Rotate passwords if crossing trust boundaries
-- [ ] Remove `WALG_CLONE_FROM` from the manifest
-- [ ] Take a fresh full backup: `backup.sh`
+After a successful restore, take a fresh backup:
+
+```bash
+kubectl exec -n db pg-phoenix-image-0 -- backup.sh
+```
 
 ## Rollback
 
-If a restore goes wrong, `restore.sh` automatically rolls back to the pre-restore snapshot (`.pre-restore` directory) and restarts PG on the old data.
+If PostgreSQL starts but the restored data is not acceptable, roll back to the previous local data directory:
 
-If the restore succeeded but the data isn't what you expected, run `restore.sh` again with different parameters. The previous restore becomes the new pre-restore snapshot.
+```yaml
+env:
+  - name: PG_RESTORE_ROLLBACK
+    value: "true"
+  - name: PG_RESTORE_REQUEST_ID
+    value: "rollback-incident-2026-05-03"
+```
+
+Apply and restart the pod. The entrypoint moves current PGDATA to `failed-restore`, moves `pre-restore` back to PGDATA, then starts PostgreSQL on the previous data.
+
+Remove `PG_RESTORE_ROLLBACK` after the rollback succeeds.
+
+## Cleanup
+
+After validation and a fresh backup:
+
+- Remove restore or clone env vars from the StatefulSet.
+- Decide whether to keep or delete `pre-restore`.
+- Keep `failed-restore` only long enough for investigation.
 
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `backup-fetch` fails: "no backups found" | Wrong prefix, or no backups taken yet | Verify `WALG_S3_PREFIX` and run `wal-g backup-list` to confirm. |
-| WAL replay stops before target time | WAL gap — missing segments between backup and target | Check `wal-g wal-verify integrity`. Take a fresh backup to anchor a new chain going forward. |
-| "PGDATA is not empty" on clone | PVC already has data, clone guard prevents re-running | Use a fresh PVC, or wipe PGDATA manually before cloning. |
-| Restore succeeded but PG won't accept connections | Recovery didn't complete promotion | Check PG logs. May need to run `SELECT pg_wal_replay_resume();` if paused. |
-| Disk full during restore | PVC too small for backup + pre-restore snapshot | Free space or expand PVC. `restore.sh` will roll back if it detects failure. |
+| `backup-fetch` reports no backups | Wrong prefix or no usable base backup | Verify source prefix and `wal-g backup-list`. |
+| Restore refuses because request ID is missing | Explicit restore or rollback does not have an idempotency key | Add `PG_RESTORE_REQUEST_ID` and retry. |
+| Restore env remains after a successful restore | Manifest cleanup has not happened yet | The completed request marker skips repeated restore. Remove restore env during cleanup. |
+| Restore refuses to overwrite PGDATA | Missing `PG_RESTORE_OVERWRITE=true` | Add the overwrite gate only after confirming the target PVC is correct. |
+| Restore refuses because `pre-restore` exists | Previous restore has not been cleaned up or rolled back | Validate the existing rollback point before removing it or set `PG_RESTORE_ROLLBACK=true`. |
+| PostgreSQL fails during WAL replay | WAL gap, invalid target time, or incompatible restored data | Inspect PostgreSQL logs, then retry restore or roll back from `pre-restore`. |
+| Disk full during restore | PVC lacks room for staged restore | Expand the PVC or remove unneeded retained restore directories. |

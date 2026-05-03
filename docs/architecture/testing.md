@@ -103,7 +103,12 @@ Each scenario uses a new container because entrypoint behavior is mostly env-dri
 | WAL-G prefix without `BACKUP_SCHEDULE` refuses startup | PG + MinIO |
 | Invalid `ARCHIVE_TIMEOUT` refuses startup | PG + MinIO |
 | Invalid `BACKUP_SCHEDULE` refuses startup | PG + MinIO |
-| Clone env on empty PGDATA triggers bootstrap restore | 2x PG + MinIO |
+| Restore env over existing PGDATA without overwrite gate refuses startup | PG + MinIO |
+| Restore env without request ID refuses startup | PG + MinIO |
+| Completed restore request ID is skipped on restart | PG + MinIO |
+| Restore rollback env swaps `pre-restore` back | PG + MinIO |
+| Completed rollback request ID is skipped on restart | PG + MinIO |
+| Clone env on empty PGDATA triggers startup restore | 2x PG + MinIO |
 | Clone env on existing PGDATA is skipped | PG + MinIO |
 | Version mismatch without `PG_UPGRADE` refuses startup | PG only |
 | Binary stash exists after startup | PG only |
@@ -117,7 +122,7 @@ One shared PG + MinIO pair. Backup tests create the state that restore tests con
 |---|---|---|
 | Backup | Cron scheduled, base backup, WAL archive, delta, retention, `archive_timeout`, version-prefixed path | Sequential |
 | Backup without creds | No WAL-G credentials configured, graceful skip | Fresh PG container |
-| Restore | PITR, latest restore, rollback on fetch/start failure, idempotent stop, empty PGDATA, bootstrap flag | Sequential |
+| Restore | startup latest restore, startup PITR, overwrite gate, failed fetch leaves PGDATA untouched, explicit rollback | Sequential |
 
 ### `clone.test.js`: Source + Target + MinIO
 
@@ -149,6 +154,7 @@ The full upgrade suite is a pre-merge/release gate, not the normal edit loop. CI
 
 - `startPg(overrides?)`: single PostgreSQL container, default `POSTGRES_PASSWORD=test`
 - `startPgWithMinio(overrides?)`: PostgreSQL plus MinIO, bucket initialization, and WAL-G env
+- restore helpers should use mounted Docker volumes for PGDATA when validating startup restore and rollback behavior
 
 `tests/helpers/shell.js` centralizes Linux Bash execution for script contract tests.
 

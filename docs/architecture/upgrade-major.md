@@ -33,7 +33,7 @@ Before deploying the new image with `PG_UPGRADE=true`:
 | Pre-upgrade backup | Mandatory — refuse to upgrade without a verified recent WAL-G backup | Optional, trust the operator | The backup is the only rollback path from a post-upgrade failure. Without it, rollback means data loss. Non-negotiable. |
 | Backup prefix after upgrade | Automatic — version suffix switches from `.../18` to `.../19` | Manual prefix change, single flat prefix | WAL-G has no concept of PG version. Mixed-version files in one prefix cause corrupt delta chains, broken `wal-verify`, and retention deleting the pre-upgrade backup. Version suffix is appended at runtime by the entrypoint — see [backup.md](backup.md). Old prefix is frozen for the rollback window. |
 | Rollback — during upgrade | Data rolled back, container exits, operator reverts image | Auto-start old version from stash | `--link` doesn't modify old files. Script restores old PGDATA and exits with a clear message telling the operator to revert the image tag. No degraded-mode PG running on mismatched binaries. |
-| Rollback — after upgrade | Operator reverts image + `restore.sh` from pre-upgrade backup | Automatic rollback | Can't auto-detect "new version subtly breaks my app." Human determines it's bad, reverts image. If new PG wrote data, `restore.sh` recovers from pre-upgrade backup. |
+| Rollback — after upgrade | Operator reverts image and requests startup restore from the pre-upgrade backup | Automatic rollback | Can't auto-detect "new version subtly breaks my app." Human determines it's bad, reverts image. If new PG wrote data, startup restore recovers from the pre-upgrade backup. |
 | Shared library compatibility | Assume consecutive PG major images share the same Debian release (bookworm) | Stash `/usr/lib/` deps, fat image with both PG versions, init container | Stashing binaries only works if system libraries match. Official `postgres:N` images track the same Debian release across adjacent majors. If a future PG version switches Debian release (bookworm → trixie), the stash approach breaks — fall back to a fat image or init container for that transition. |
 
 ## Implementation
@@ -64,7 +64,7 @@ Stash structure:
     └── checksum
 ```
 
-**Prerequisite**: The PVC must be mounted at `/var/lib/postgresql/`. This is the default for official `postgres:*` images (PGDATA is `/var/lib/postgresql/data`), so the stash directory is always a sibling of the data directory on the same filesystem.
+**Prerequisite**: The PVC must be mounted at `/var/lib/postgresql/`. PGDATA is a versioned directory below that mount, so the stash, restore, and upgrade working directories are siblings on the same filesystem.
 
 **Constraint**: The stashed binaries are dynamically linked against Debian system libraries. This approach assumes that `postgres:N` and `postgres:N+1` share the same Debian base release. Verify this before each major upgrade — if the new image uses a different Debian release, the stashed old binaries may fail with `libssl`/`libreadline` soname mismatches. In that case, use a two-image init-container approach instead.
 
@@ -169,11 +169,11 @@ upgrade (entrypoint detects version mismatch + PG_UPGRADE=true)
 | Pre-upgrade checks | Backup missing, `--check` fails, no stashed binaries | PGDATA untouched | Fix issue and retry, or revert image |
 | `pg_upgrade --link` | Upgrade itself fails | Old PGDATA untouched (`--link` doesn't modify source) | Container exits → operator reverts image tag |
 | New PG startup | PG won't start on new data | Script swaps old data dir back | Container exits → operator reverts image tag |
-| Post-upgrade (app breakage) | Discovered later by operator | New PG has been writing data | Operator reverts image + runs `restore.sh` from pre-upgrade WAL-G backup. Loses writes since upgrade. |
+| Post-upgrade (app breakage) | Discovered later by operator | New PG has been writing data | Operator reverts image + requests startup restore from the pre-upgrade WAL-G backup. Loses writes since upgrade. |
 
 ### Old Prefix Cleanup
 
-After a successful upgrade, the old version prefix (e.g., `$BASE_PREFIX/18`) is frozen — no new backups are written to it, but its data is retained for rollback. If the operator needs to revert (see rollback phases above), `restore.sh` fetches from this prefix.
+After a successful upgrade, the old version prefix (e.g., `$BASE_PREFIX/18`) is frozen — no new backups are written to it, but its data is retained for rollback. If the operator needs to revert (see rollback phases above), startup restore fetches from this prefix.
 
 **Recommended approach**: retain the old prefix for a fixed rollback window (7 days minimum), then purge:
 
@@ -207,7 +207,7 @@ No automation — major upgrades are infrequent and the cleanup decision require
 | `pg_upgrade --check` fails | Pre-upgrade | Can't upgrade | PGDATA untouched. Incompatible extension, locale mismatch, etc. Operator fixes the issue or stays on old version. |
 | `pg_upgrade --link` fails mid-run | During upgrade | New data dir incomplete | Old PGDATA untouched (link, not copy). Script removes partial new dir. Container exits with message: revert image to old version. |
 | New PG fails to start | Post-upgrade | New data dir exists but PG won't run | Script swaps old data dir back. Container exits with message: revert image to old version. |
-| New PG starts but app breaks (discovered later) | Post-upgrade, post-start | Running but broken | Operator reverts image tag. If data was written on new version, operator runs `restore.sh` from pre-upgrade WAL-G backup. Loses writes since upgrade. |
+| New PG starts but app breaks (discovered later) | Post-upgrade, post-start | Running but broken | Operator reverts image tag. If data was written on new version, operator requests startup restore from the pre-upgrade WAL-G backup. Loses writes since upgrade. |
 | WAL-G backup fails before upgrade | Pre-upgrade | Can't upgrade | Refuses to proceed without verified backup. Operator fixes backup issue first. |
 
 ## Testing

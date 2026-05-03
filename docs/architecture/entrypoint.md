@@ -22,15 +22,14 @@ entrypoint.sh
   ├─ 3. VERSION-PREFIX BACKUP PATH
   │   └─ detect active prefix (WALG_S3_PREFIX → WALG_GS_PREFIX → WALG_AZ_PREFIX, first set wins) → append /<major>/ [backup.md]
   │
-  ├─ 4. CLONE DETECTION
-  │   ├─ WALG_CLONE_FROM set?
-  │   │   ├─ strip trailing slash (${WALG_CLONE_FROM%/}) before any validation
-  │   │   ├─ reject with fatal error if value doesn't end with /<digits> (e.g. /18)
-  │   │   │   (intentionally duplicated in restore.sh — defense-in-depth; restore.sh is independently callable)
-  │   │   ├─ PGDATA empty (no PG_VERSION)?
-  │   │   │   └─ restore.sh --bootstrap --from $WALG_CLONE_FROM [--target-time ...] [restore.md]
-  │   │   └─ PGDATA exists → skip (idempotent)
-  │   └─ not set → skip
+  ├─ 4. RESTORE REQUEST
+  │   ├─ PG_RESTORE_ROLLBACK=true?
+  │   │   └─ restore.sh with RESTORE_REQUEST_ID=$PG_RESTORE_REQUEST_ID [restore.md]
+  │   ├─ PG_RESTORE=true or PG_RESTORE_FROM set?
+  │   │   └─ restore.sh with RESTORE_REQUEST_ID=$PG_RESTORE_REQUEST_ID [--from ...]
+  │   ├─ WALG_CLONE_FROM set + PGDATA empty?
+  │   │   └─ restore.sh --from $WALG_CLONE_FROM [--target-time ...]
+  │   └─ otherwise skip
   │
   ├─ 5. BACKUP SETUP
   │   ├─ WAL-G prefix set (any of WALG_S3_PREFIX / WALG_GS_PREFIX / WALG_AZ_PREFIX)?
@@ -57,8 +56,8 @@ entrypoint.sh
 | Decision | Choice | Alternatives | Rationale |
 |---|---|---|---|
 | Wrapper vs fork | Wraps official `docker-entrypoint.sh` via `exec` | Fork/patch upstream entrypoint | Upstream entrypoint handles `initdb`, `POSTGRES_PASSWORD`, extension loading, `docker-entrypoint-initdb.d/` scripts. No reason to reimplement. `exec` replaces the process — PG becomes PID 1 and receives signals correctly. |
-| Feature ordering | Version check → stash → prefix → clone → backup → handoff | Various | Version check must be first (blocks startup on mismatch). Stash before prefix (stash uses unprefixed binary version). Stash runs unconditionally — it writes to `/var/lib/postgresql/.pg-binaries/` (outside PGDATA), so it's safe even on first boot before initdb. Clone before backup setup (clone must populate PGDATA before PG starts; backup setup writes to `/etc/` and doesn't depend on PGDATA). |
-| Graceful degradation | Each feature is independently skippable | All-or-nothing | No `WALG_S3_PREFIX` → steps 3 and 5 skip. No `WALG_CLONE_FROM` → step 4 skips. The image always works as a plain PostgreSQL container with zero config. |
+| Feature ordering | Version check → stash → prefix/env file → restore → backup → handoff | Various | Version check blocks unsafe startup first. Restore needs WAL-G credentials and prefix resolution before fetching, but cron should start only after restore decisions are complete. |
+| Graceful degradation | Each feature is independently skippable | All-or-nothing | No WAL-G prefix → backup setup skips. No restore env → restore skips. The image still works as a plain PostgreSQL container with zero config. |
 
 ## Configuration
 
@@ -68,6 +67,8 @@ No configuration specific to the entrypoint itself. It reads env vars documented
 |---|---|---|
 | `PG_UPGRADE` | Major upgrade gate | [upgrade-major.md](upgrade-major.md) |
 | `WALG_S3_PREFIX` / `WALG_GS_PREFIX` / `WALG_AZ_PREFIX` | Backup path (first set wins, version-suffixed at runtime) | [backup.md](backup.md) |
+| `PG_RESTORE` / `PG_RESTORE_FROM` / `PG_RESTORE_TARGET_TIME` / `PG_RESTORE_REQUEST_ID` | Startup restore | [restore.md](restore.md) |
+| `PG_RESTORE_OVERWRITE` / `PG_RESTORE_ROLLBACK` | Restore overwrite and local rollback gates | [restore.md](restore.md) |
 | `WALG_CLONE_FROM` | Clone source prefix | [restore.md](restore.md) |
 | `WALG_CLONE_TARGET_TIME` | Clone PITR target | [restore.md](restore.md) |
 | `BACKUP_SCHEDULE` | Cron expression | [backup.md](backup.md) |
@@ -78,7 +79,9 @@ No configuration specific to the entrypoint itself. It reads env vars documented
 | Failure | Behavior |
 |---|---|
 | Version mismatch without `PG_UPGRADE` | Refuses to start with clear error message. See [upgrade-major.md](upgrade-major.md). |
-| Clone fails (`restore.sh` exits non-zero) | Container fails to start. Correct — no partial PGDATA. |
+| Restore fails before swap | Container fails to start. Existing PGDATA is untouched. |
+| Restore env remains after success | The completed request marker causes startup to skip the already-applied request. |
+| PostgreSQL fails during WAL replay | Container fails to start. Operator can set `PG_RESTORE_ROLLBACK=true` to restore `pre-restore`. |
 | Cron daemon fails to start | Warning logged, PG starts anyway. WAL archiving still works (driven by PG, not cron). Scheduled base backups don't run. |
 | Invalid `BACKUP_SCHEDULE` | Refuses to start with clear error message. Fix the cron expression. |
 | `BACKUP_SCHEDULE` missing with WAL-G prefix set | Refuses to start. WAL archiving without base backups produces an unrestorable backup set. Set `BACKUP_SCHEDULE` in the manifest. |
@@ -95,8 +98,14 @@ Each scenario uses a fresh container with different env vars (see [testing.md](t
 - `WALG_S3_PREFIX` set → cron running, WAL archiving configured
 - `WALG_S3_PREFIX` set without `BACKUP_SCHEDULE` → container refuses to start
 - `WALG_S3_PREFIX` set with invalid `ARCHIVE_TIMEOUT` → container refuses to start
+- `PG_RESTORE=true` without `PG_RESTORE_REQUEST_ID` → container refuses to start
+- `PG_RESTORE=true` with existing PGDATA and no overwrite gate → container refuses to start
+- `PG_RESTORE=true` + `PG_RESTORE_OVERWRITE=true` → startup restore is prepared
+- same `PG_RESTORE_REQUEST_ID` after completed restore → restore skipped
+- `PG_RESTORE_ROLLBACK=true` → `pre-restore` is restored before handoff
+- same rollback request ID after completed rollback → rollback skipped
 - `WALG_CLONE_FROM` + empty PGDATA → clone triggered
-- `WALG_CLONE_FROM` + existing PGDATA → clone skipped (idempotent)
+- `WALG_CLONE_FROM` + existing PGDATA → clone skipped
 - Version match → normal startup
 - Version mismatch + no gate → container refuses to start
 - Binary stash exists after startup

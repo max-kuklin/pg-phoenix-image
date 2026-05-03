@@ -43,11 +43,10 @@ write_walg_env_file() {
   mv "$temp" "$output"
 }
 
-setup_walg() {
+setup_walg_env() {
   local prefix_name
   local prefix_value
   local versioned_prefix
-  local archive_timeout="${ARCHIVE_TIMEOUT:-60}"
   local retain_full="${BACKUP_RETAIN_FULL:-5}"
 
   prefix_name="$(walg_active_prefix_name || true)"
@@ -60,6 +59,18 @@ setup_walg() {
   export "$prefix_name=$versioned_prefix"
   export BACKUP_RETAIN_FULL="$retain_full"
 
+  write_walg_env_file "$prefix_name" "$versioned_prefix"
+}
+
+setup_backup() {
+  local prefix_name
+  local archive_timeout="${ARCHIVE_TIMEOUT:-60}"
+
+  prefix_name="$(walg_active_prefix_name || true)"
+  if [[ -z "$prefix_name" ]]; then
+    return 0
+  fi
+
   validate_non_negative_int "$archive_timeout" || log_fatal "ARCHIVE_TIMEOUT must be a non-negative integer"
 
   if [[ -z "${BACKUP_SCHEDULE:-}" ]]; then
@@ -67,8 +78,6 @@ setup_walg() {
   fi
 
   validate_cron_schedule "$BACKUP_SCHEDULE" || log_fatal "BACKUP_SCHEDULE must contain exactly 5 cron fields"
-
-  write_walg_env_file "$prefix_name" "$versioned_prefix"
 
   cat > /etc/postgresql/conf.d/walg.conf <<EOF
 archive_command = '. /etc/walg-env.sh && wal-g wal-push %p'
@@ -90,12 +99,47 @@ EOF
   fi
 }
 
+pgdata_exists() {
+  [[ -e "${PGDATA:-/var/lib/postgresql/$PG_MAJOR/docker}/PG_VERSION" ]]
+}
+
+run_restore_if_requested() {
+  local args=()
+  local target_time="${PG_RESTORE_TARGET_TIME:-}"
+
+  if [[ "${PG_RESTORE_ROLLBACK:-}" == "true" ]]; then
+    RESTORE_ROLLBACK=true RESTORE_REQUEST_ID="${PG_RESTORE_REQUEST_ID:-}" restore.sh
+    return 0
+  fi
+
+  if [[ -n "${PG_RESTORE_FROM:-}" ]]; then
+    args+=(--from "$PG_RESTORE_FROM")
+  elif [[ -n "${WALG_CLONE_FROM:-}" ]]; then
+    if pgdata_exists; then
+      return 0
+    fi
+
+    args+=(--from "$WALG_CLONE_FROM" --bootstrap)
+    target_time="${WALG_CLONE_TARGET_TIME:-}"
+  elif [[ "${PG_RESTORE:-}" != "true" ]]; then
+    return 0
+  fi
+
+  if [[ -n "$target_time" ]]; then
+    args+=(--target-time "$target_time")
+  fi
+
+  RESTORE_OVERWRITE="${PG_RESTORE_OVERWRITE:-false}" RESTORE_REQUEST_ID="${PG_RESTORE_REQUEST_ID:-}" restore.sh "${args[@]}"
+}
+
 if [[ "${1:-}" == -* ]]; then
   set -- postgres "$@"
 fi
 
 if [[ "${1:-}" == "postgres" ]]; then
-  setup_walg
+  setup_walg_env
+  run_restore_if_requested
+  setup_backup
   exec docker-entrypoint.sh "$@" -c config_file=/etc/postgresql/postgresql.conf
 fi
 

@@ -6,7 +6,7 @@ Define how the image is built, what goes into each layer, and why. The image is 
 
 ## Concept
 
-Single-stage build. Extends the official `postgres:18` (Debian bookworm) image, downloads the precompiled WAL-G release binary, copies in scripts, config, and minimal runtime packages.
+Single-stage build. Extends the official `postgres:18` image, downloads the precompiled WAL-G release binary, copies in scripts, config, and minimal runtime packages.
 
 ```
 ┌─────────────────────────────────┐
@@ -23,7 +23,7 @@ Single-stage build. Extends the official `postgres:18` (Debian bookworm) image, 
 
 | Decision | Choice | Alternatives | Rationale |
 |---|---|---|---|
-| Base image | `postgres:18` (Debian bookworm) | `postgres:18-alpine` (~80MB) | Debian allows using official precompiled WAL-G release binaries directly — no build stage, no Go toolchain, simpler Dockerfile. Alpine requires building WAL-G from source (`CGO_ENABLED=0`) because release binaries are glibc-linked. The ~320MB size increase is acceptable given the simpler build, broader package compatibility, and reduced maintenance burden (no musl edge cases). |
+| Base image | `postgres:18` Debian variant | `postgres:18-alpine` (~80MB) | Debian allows using official precompiled WAL-G release binaries directly — no build stage, no Go toolchain, simpler Dockerfile. Alpine requires building WAL-G from source (`CGO_ENABLED=0`) because release binaries are glibc-linked. The larger image is acceptable given the simpler build, broader package compatibility, and reduced maintenance burden. |
 | WAL-G installation | Precompiled release binary from GitHub | Build from source (multi-stage), distro package | Release binaries are glibc-linked (why Debian, not Alpine). Pinned to an exact release tag with SHA-256 verification. Single `curl` + `tar` — no Go toolchain, no multi-stage build, no build cache invalidation on Go module updates. |
 | Cron provider | Debian `cron` package | `busybox` crond, `dcron`, `supercrond` | Standard Debian cron daemon for scheduled base backups. No extra dependencies beyond base repos. |
 | Config approach | Ship `postgresql.conf` with `include_dir = 'conf.d'` | Env-var templating, full ConfigMap override | No custom scripting layer. Users mount a ConfigMap into `conf.d/` to override individual settings without replacing the entire file. See [slow-query-log.md](slow-query-log.md) for precedence details. |
@@ -31,7 +31,7 @@ Single-stage build. Extends the official `postgres:18` (Debian bookworm) image, 
 
 ## Build
 
-Base: `postgres:18` (Debian bookworm)
+Base: `postgres:18` Debian variant.
 
 Runtime packages (via `apt-get install --no-install-recommends`):
 
@@ -93,16 +93,19 @@ The Dockerfile includes a `HEALTHCHECK` using `pg_isready` for `docker run` user
 
 ## PVC Sizing
 
+Mount the PVC at `/var/lib/postgresql`, not directly at PGDATA. Restore and major upgrade operations need sibling directories beside the active data directory, and those sibling moves must stay on the same filesystem.
+
 Minimum PVC headroom depends on which features are active:
 
 | Operation | Temporary disk cost | Duration |
 |---|---|---|
 | Normal operation | PGDATA + WAL backlog (bounded by archiving speed) + logs (bounded by `log_rotation_size`) | Ongoing |
-| Restore (`restore.sh`) | 2× PGDATA (`.pre-restore` snapshot) | Until restore completes or rolls back |
+| Startup restore into empty PGDATA | fetched PGDATA + WAL replay/log growth | Until restore completes |
+| Startup restore over existing PGDATA | current PGDATA + `restore-tmp` + `pre-restore` | Until validation and cleanup |
 | Major upgrade (`upgrade.sh`) | PGDATA + `$PGDATA.new` (minimal with `--link` — hard links, not copies) + `$PGDATA.old` (retained until post-upgrade cleanup) | Until post-upgrade cleanup |
 | Binary stash | ~15MB per major version | Permanent |
 
-**Recommendation**: provision at least 2.5× the expected data size. This covers the restore snapshot with headroom for WAL backlog and logs. Major upgrades need less additional space than restores because `--link` avoids copying data.
+**Recommendation**: provision at least 3× the expected data size when startup restore over existing data is part of the operational model. Major upgrades need less additional space than restores because `--link` avoids copying data.
 
 ## Testing
 

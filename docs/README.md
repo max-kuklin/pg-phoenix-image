@@ -7,9 +7,9 @@ How and why each feature works. Read these to understand design decisions, trade
 | Doc | Covers |
 |---|---|
 | [image.md](architecture/image.md) | Docker image build, base image choice, WAL-G installation |
-| [entrypoint.md](architecture/entrypoint.md) | Startup orchestration — version check, clone, backup setup, handoff |
+| [entrypoint.md](architecture/entrypoint.md) | Startup orchestration — version check, restore selection, backup setup, handoff |
 | [backup.md](architecture/backup.md) | WAL archiving, base backups, delta chains, version-prefixed S3 paths |
-| [restore.md](architecture/restore.md) | Disaster recovery, PITR, clone — single script, auto-rollback |
+| [restore.md](architecture/restore.md) | Startup restore, PITR, clone, and explicit local rollback |
 | [upgrade-major.md](architecture/upgrade-major.md) | In-place `pg_upgrade --link`, binary stash, rollback phases |
 | [upgrade-minor.md](architecture/upgrade-minor.md) | Renovate-driven rebuild cycle, digest pinning |
 | [metrics.md](architecture/metrics.md) | `pg_stat_statements` setup, exporter sidecar boundary |

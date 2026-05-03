@@ -2,153 +2,144 @@
 
 ## Purpose
 
-Recover a PostgreSQL instance from WAL-G backups. Three scenarios, same mechanism:
+Recover a PostgreSQL instance from WAL-G backups during container startup.
 
 | Scenario | Source | Target |
 |---|---|---|
-| **Disaster recovery** | Same instance's backups | Latest available state |
-| **Point-in-time recovery** | Same instance's backups | Specific timestamp (undo bad migration, accidental delete) |
-| **Clone** | *Another* instance's backups | Latest or specific timestamp (staging refresh, migration) |
+| Disaster recovery | Same instance's backups | Latest available state |
+| Point-in-time recovery | Same instance's backups | Specific timestamp |
+| Clone | Another instance's backups | Latest or specific timestamp |
 
-All three: `backup-fetch` → `recovery.signal` → start PG → WAL replay → promote. Differences are which S3 prefix to read from and whether `recovery_target_time` is set.
+All scenarios use the same PostgreSQL mechanism: `wal-g backup-fetch`, `recovery.signal`, `restore_command`, PostgreSQL startup, WAL replay, and promotion. The important project constraint is that restore is a startup operation. The image does not stop and restart a live PostgreSQL process from inside the running container.
 
 ## Concept
 
-`restore.sh` is the single restore engine. It's safe to run regardless of current state — it handles stopping PG, snapshotting data, fetching backups, and rolling back on any failure. The operator (or entrypoint) never has to manually recover.
-
-```
-restore.sh [--from SOURCE_PREFIX] [--target-time TIMESTAMP] [--bootstrap]
-  │
-  ├─ PG running? → stop it
-  ├─ PGDATA non-empty? → move to PGDATA.pre-restore
-  ├─ backup-fetch LATEST
-  │   └─ FAIL → restore PGDATA.pre-restore, restart PG, exit 1
-  ├─ write recovery.signal + restore_command
-  │   └─ if --from → embed source prefix in restore_command (WAL fetch from source, not instance prefix)
-  ├─ if --target-time → add recovery_target_time + promote
-  │
-  ├─ --bootstrap? → return (PG startup delegated to docker-entrypoint.sh)
-  │
-  ├─ start PG (WAL replay → promote)
-  │   ├─ poll: while postgres process alive + pg_is_in_recovery() = true → keep waiting
-  │   └─ process exits or becomes unresponsive → stop PG, restore PGDATA.pre-restore, restart PG, exit 1
-  ├─ cleanup recovery settings from postgresql.auto.conf
-  └─ remove PGDATA.pre-restore
-```
-
-**Entrypoint calls the same script** with `--bootstrap` for clone/bootstrap:
+PostgreSQL is PID 1 after `docker-entrypoint.sh` hands off. A restore that stops PostgreSQL from inside the same container also terminates the container, so live in-place restore is the wrong lifecycle boundary. Operators request restore by changing environment variables; Kubernetes restarts the pod; the entrypoint prepares PGDATA before PostgreSQL starts.
 
 ```
 entrypoint.sh
-  │
-  ├─ WALG_CLONE_FROM set + PGDATA empty?
-  │   └─► restore.sh --bootstrap --from $WALG_CLONE_FROM [--target-time $WALG_CLONE_TARGET_TIME]
-  │
-  ├─ setup backup cron (if WALG_S3_PREFIX set)
-  └─ exec docker-entrypoint.sh
+  |
+  |-- write /etc/walg-env.sh when WAL-G is configured
+  |-- restore requested?
+  |     |-- request ID already completed? -> skip
+  |     |-- rollback requested? -> swap pre-restore back to PGDATA, exit restore path
+  |     |-- fetch backup into restore-tmp
+  |     |-- write recovery.signal and restore settings
+  |     |-- if PGDATA exists and overwrite allowed -> move PGDATA to pre-restore
+  |     |-- move restore-tmp to PGDATA
+  |
+  |-- configure archiving and cron
+  |-- exec docker-entrypoint.sh ... -c config_file=/etc/postgresql/postgresql.conf
 ```
 
-`--bootstrap` tells `restore.sh` to stop after fetching the backup and writing `recovery.signal` — it does **not** start PG. `docker-entrypoint.sh` handles PG startup, detects the `recovery.signal` file, and starts PG in recovery mode (WAL replay → promote).
+The restore fetch happens before the existing data directory is moved. If `backup-fetch` fails, existing PGDATA is still in place. The swap happens only after the fetched directory has been prepared.
 
-**Why skipping PG startup is safe here**: `--bootstrap` is only used on the clone path, where PGDATA is empty. There is no pre-existing data, so there's nothing to snapshot or roll back — the auto-rollback steps (restore `.pre-restore`, restart PG on old data) are inherently no-ops. If `backup-fetch` fails, `restore.sh` exits non-zero and the container fails to start. If WAL replay fails after `docker-entrypoint.sh` starts PG, the container also crashes — but there's no prior state to recover, so rollback would be meaningless either way. The operator retries the clone or fixes the source.
+## PVC Layout
 
-Manual `restore.sh` (without `--bootstrap`) retains the full lifecycle — PG start, replay failure detection, and rollback to `.pre-restore` — because it operates on instances with existing data where rollback is both possible and critical.
+The PVC must be mounted at `/var/lib/postgresql`, not directly at PGDATA. The official PostgreSQL 18 image uses a versioned data directory under that mount, so restore can keep sibling directories on the same filesystem:
 
-After first boot, `PG_VERSION` exists in PGDATA, so the clone guard prevents re-running even if `WALG_CLONE_FROM` is still set.
+| Path | Purpose |
+|---|---|
+| `$PGDATA` | Active PostgreSQL data directory, for example `/var/lib/postgresql/18/docker` |
+| `$PGDATA_PARENT/restore-tmp` | New data fetched by WAL-G before the swap |
+| `$PGDATA_PARENT/pre-restore` | Previous active data kept for manual rollback |
+| `$PGDATA_PARENT/failed-restore` | Data moved aside during explicit rollback, retained for inspection |
+| `$PGDATA_PARENT/restore-state` | Completed restore and rollback request markers |
+
+Sibling moves on the same PVC avoid cross-device copies and make the final directory swap fast. The trade-off is disk headroom: restoring over an existing database can temporarily require current PGDATA, fetched data, and retained pre-restore data to coexist.
 
 ## Design Decisions
 
 | Decision | Choice | Alternatives | Rationale |
 |---|---|---|---|
-| Single script | `restore.sh` handles all scenarios via flags (`--bootstrap` for entrypoint, full lifecycle for manual use) | Separate clone/restore scripts, duplicated logic in entrypoint | One implementation to test and maintain. `--bootstrap` skips PG startup so `docker-entrypoint.sh` controls the PG lifecycle on first boot. Safe because the clone path always has empty PGDATA — no prior state exists to roll back to (see entrypoint integration above). |
-| Script manages PG lifecycle | Stops PG if running, starts after restore, restarts old data on failure | Caller manages stop/start | Makes the script safe to invoke from anywhere — no preconditions. Operator can't forget to stop PG first. |
-| Auto-rollback on failure | Any failure → restore `.pre-restore`, restart PG on old data | Manual rollback, or just fail | Operator never inherits a broken state. Worst case: restore fails, PG comes back on previous data. |
-| Pre-restore snapshot | Move PGDATA to `.pre-restore` | Wipe PGDATA, rely on backups | Local rollback without another backup-fetch cycle. Costs 2x disk temporarily. Skipped when PGDATA is empty (clone path). |
-| `recovery_target_action` | `promote` (default) | `pause` | Fully automated flow. `pause` requires `pg_wal_replay_resume()` which complicates scripting and testing. |
-| Auto-cleanup of recovery settings | Script resets `recovery_target_time` etc. from `postgresql.auto.conf` after promotion | Leave them (harmless after promote) | Stale settings in auto.conf are a maintenance hazard even if PG ignores them without `recovery.signal`. |
-| Cross-instance restore | `--from` flag / `WALG_CLONE_FROM` env var, separate from the instance's own prefix | Single prefix, manual override | The instance's own prefix = "where this instance archives to" (version suffix appended at runtime — see [backup.md](backup.md)). `--from` = "where to read from" (full version-scoped path on the same cloud backend, e.g. `s3://bucket/source/18`). Temporarily overrides the active prefix for the fetch — does not change where the instance archives after restore. Cross-cloud restore is not supported. |
-| WAL replay wait strategy | Process monitoring (poll `pg_is_in_recovery()` while postgres is alive) | Fixed timeout (`RESTORE_TIMEOUT=300s`) | PostgreSQL has no built-in replay timeout — it replays until done. WAL replay duration is unpredictable: it depends on WAL volume (hours/days of changes since the base backup), disk I/O throughput, and operation complexity — not on data size. A 1GB database with 24h of heavy writes takes longer than a 100GB database with 30min of idle WAL. Any fixed timeout is either too short (kills valid long replays) or too long (delays failure detection). Monitoring the process directly is both correct and simpler. |
-
-## Implementation
-
-### restore.sh
-
-Accepts `--from SOURCE_PREFIX`, `--target-time TIMESTAMP`, and `--bootstrap` flags.
-
-Behavior:
-
-1. Stops PG if running (`pg_ctl status` check first)
-2. If PGDATA has data (`PG_VERSION` exists) → moves to `PGDATA.pre-restore`
-3. Defines a `rollback()` function that restores `.pre-restore` and restarts PG; registers it as a `trap` handler for `EXIT` / `SIGTERM` so pod drains or unexpected termination trigger automatic cleanup instead of leaving orphaned `.pre-restore` state
-4. If `--from` specified → strips trailing slash (`${from%/}`), then validates it matches `/[0-9]+$` (a slash followed by one or more digits at the end, e.g. `/18`). Paths like `s3://bucket/pg18` (no slash before digits) are rejected with a fatal error: "--from must end with a version segment, e.g. s3://bucket/source/18". Trailing slashes (e.g. `s3://bucket/source/18/`) are handled gracefully by stripping before validation — consistent with how the entrypoint handles the instance's own prefix. This validation is intentionally duplicated from the entrypoint (defense-in-depth) — `restore.sh` enforces its own contract regardless of caller. Overrides the active prefix variable (whichever of `WALG_S3_PREFIX` / `WALG_GS_PREFIX` / `WALG_AZ_PREFIX` is set)
-5. Runs `backup-fetch LATEST` → on failure calls `rollback`, exits 1
-6. Writes `recovery.signal` to PGDATA. Appends `restore_command` to the `postgresql.auto.conf` already present in the fetched backup data (`backup-fetch` populates PGDATA including the source instance's `postgresql.auto.conf` — the script appends to it, not creates from scratch). If `--from` was specified, the `restore_command` embeds the source prefix inline so WAL segments are fetched from the correct location:
-   - **Same-instance**: `restore_command = '. /etc/walg-env.sh && wal-g wal-fetch %f %p'`
-   - **Cross-instance** (`--from`): `restore_command = '. /etc/walg-env.sh && WALG_S3_PREFIX=<source_prefix> wal-g wal-fetch %f %p'`
-   This is critical for the `--bootstrap` clone path, where `walg-env.sh` is not yet written (entrypoint step 5 runs after clone detection in step 4) — and even for manual cross-instance restores, where `walg-env.sh` contains the instance's own prefix, not the source's
-7. If `--target-time` set → appends `recovery_target_time` + `recovery_target_action = promote` to `postgresql.auto.conf`
-8. If `--bootstrap` → returns here (PG startup delegated to `docker-entrypoint.sh`)
-9. Starts PG and monitors WAL replay: polls `pg_is_in_recovery()` while the postgres process is alive. Replay duration is unbounded — it depends on WAL volume, not data size (see design note below). If the process exits or becomes unresponsive → calls `rollback`, exits 1
-10. Resets recovery settings via `ALTER SYSTEM RESET`
-11. Removes `.pre-restore`
-
-### Entrypoint integration
-
-In `entrypoint.sh`, before handing off to `docker-entrypoint.sh`:
-
-- If `WALG_CLONE_FROM` set and PGDATA empty (`PG_VERSION` missing) → calls `restore.sh --bootstrap --from $WALG_CLONE_FROM` with optional `--target-time`
-- `docker-entrypoint.sh` then sees populated PGDATA with `recovery.signal`, starts PG in recovery mode
-- After first boot, `PG_VERSION` exists → clone guard prevents re-running
+| Restore timing | Startup-only | `kubectl exec restore.sh` against a live pod | Aligns with container lifecycle. PostgreSQL remains PID 1 and the pod restart is the operational boundary. |
+| Existing data guard | Require `PG_RESTORE_OVERWRITE=true` | Overwrite whenever restore env is present | Prevents an accidental manifest change from replacing a live PVC. Clone into an empty PVC does not need the overwrite gate. |
+| Restore idempotency | Require `PG_RESTORE_REQUEST_ID` for explicit restore and rollback | Trust operators to remove restore env before restart | Restore env can remain in a StatefulSet during retries or operational cleanup. A durable request marker makes repeated restarts skip an already-completed request instead of restoring recursively. |
+| Restore staging | Fetch into `restore-tmp`, then swap | Move PGDATA first, fetch directly into PGDATA | Keeps existing data untouched until WAL-G has produced a complete fetched directory. |
+| Local rollback | Keep `pre-restore` and require explicit rollback env | Auto-rollback after PostgreSQL startup failure | Once the entrypoint execs PostgreSQL, the container lifecycle owns failure handling. Explicit rollback is predictable and auditable. |
+| Cross-instance restore | Full version-scoped `PG_RESTORE_FROM` / `WALG_CLONE_FROM` | Reuse the instance write prefix | The restore source and the instance archive destination are different concepts. Source prefixes must already include the PostgreSQL major segment, such as `/18`. |
+| PITR action | `recovery_target_action = 'promote'` | `pause` | Startup should produce a running primary without requiring a manual SQL resume. |
 
 ## Configuration
 
 | Variable | Default | Description |
 |---|---|---|
-| `WALG_CLONE_FROM` | — | Full version-scoped prefix of the source instance on the same cloud backend (e.g. `s3://bucket/source/18`). Triggers auto-restore on empty PGDATA. |
-| `WALG_CLONE_TARGET_TIME` | — | Timestamp for PITR (e.g. `2026-02-13 12:00:00 UTC`). Omit for latest. |
-`restore.sh` without `--from` uses the instance's own prefix (with version suffix already applied) and credentials — no additional config needed.
+| `PG_RESTORE` | unset | Set to `true` to restore from the instance's own WAL-G prefix during startup. |
+| `PG_RESTORE_FROM` | unset | Full version-scoped source prefix, for example `s3://bucket/source/18`. Overrides the fetch source for disaster recovery or clone. |
+| `PG_RESTORE_TARGET_TIME` | unset | PITR target timestamp, passed to PostgreSQL as `recovery_target_time`. |
+| `PG_RESTORE_OVERWRITE` | unset | Must be `true` when restoring over existing PGDATA. |
+| `PG_RESTORE_REQUEST_ID` | unset | Required idempotency key for `PG_RESTORE`, `PG_RESTORE_FROM`, and `PG_RESTORE_ROLLBACK`. Change it to request another restore. |
+| `PG_RESTORE_ROLLBACK` | unset | Set to `true` to move `pre-restore` back to PGDATA during startup. |
+| `WALG_CLONE_FROM` | unset | Compatibility alias for clone-from-source. It only runs when PGDATA is empty. |
+| `WALG_CLONE_TARGET_TIME` | unset | Compatibility alias for clone PITR target. |
 
-## Security Considerations
+`PG_RESTORE_FROM` and `WALG_CLONE_FROM` must be full version-scoped paths. The image appends the version suffix only to the instance's own archive prefix, not to arbitrary restore sources.
 
-| Concern | Mitigation |
-|---|---|
-| `WALG_CLONE_FROM` grants read access to another instance's backups | Scope IAM role: clone needs only `s3:GetObject` + `s3:ListBucket` on the source prefix. No write/delete. |
-| Restored data bypasses application-level access controls | Restored instance has the same PG users/roles as the source. Rotate passwords if cloning across trust boundaries. |
-| `WALG_CLONE_FROM` left in config after bootstrap | Harmless — guarded by `PG_VERSION` check. Remove to avoid confusion. |
-| Pre-restore snapshot doubles disk usage | Temporary — removed after success or rollback. Ensure PVC has headroom. |
+`PG_RESTORE_REQUEST_ID` may contain letters, numbers, dot, underscore, and dash. Treat it as an operator-controlled idempotency key, not as a timestamp parser or generated secret. Examples: `incident-2026-05-03-latest`, `pitr-2026-05-03-1430`, `rollback-incident-2026-05-03`.
+
+## Implementation
+
+### restore.sh
+
+`restore.sh` is a startup restore preparer. It assumes PostgreSQL is not running and does not call `pg_ctl`.
+
+Behavior:
+
+1. Source `/etc/walg-env.sh` if present.
+2. Require `RESTORE_REQUEST_ID` for explicit restore or rollback requests.
+3. If the matching completion marker exists, log and skip.
+4. If `RESTORE_ROLLBACK=true`, move current PGDATA to `failed-restore`, move `pre-restore` back to PGDATA, write a rollback completion marker, and exit.
+5. Validate the restore source prefix when `--from` is used.
+6. Refuse to overwrite existing PGDATA unless `RESTORE_OVERWRITE=true`.
+7. Refuse to proceed when stale `restore-tmp` or `pre-restore` directories would make the result ambiguous.
+8. Fetch `LATEST` into `restore-tmp`.
+9. Write `recovery.signal`, `restore_command`, and optional PITR settings into the fetched data.
+10. Move existing PGDATA to `pre-restore` when present.
+11. Move `restore-tmp` to PGDATA.
+12. Write a restore completion marker.
+
+The script intentionally leaves `pre-restore` after success. Removing it is an operator decision after validation and a fresh backup.
+
+### Entrypoint Integration
+
+Entrypoint performs restore before PostgreSQL starts:
+
+- `PG_RESTORE=true` triggers restore from the instance's own prefix.
+- `PG_RESTORE_FROM` triggers restore from a source prefix.
+- `PG_RESTORE_REQUEST_ID` is passed as the restore idempotency key.
+- `WALG_CLONE_FROM` triggers restore only when PGDATA is empty.
+- `PG_RESTORE_ROLLBACK=true` swaps `pre-restore` back before handoff.
+
+After restore preparation, the official entrypoint starts PostgreSQL. WAL replay and promotion are normal PostgreSQL startup behavior.
 
 ## Failure Modes
 
-| Failure | Impact | Behavior |
+| Failure | Data state | Behavior |
 |---|---|---|
-| `backup-fetch` fails (no backup, S3 error) | No restore | `.pre-restore` moved back, PG restarted on old data. Exit 1. |
-| WAL gap (missing segments) | PG fails to start | Auto-rollback to `.pre-restore`. |
-| Disk full during restore | `backup-fetch` or WAL replay fails | Auto-rollback to `.pre-restore`. May need to free space first. |
-| Target time before oldest backup | No valid backup found | `backup-fetch` fails → auto-rollback. |
-| Target time after latest WAL | PG replays all available WAL and promotes at that point | Silent partial success. PG logs actual recovery endpoint — monitor and compare. |
-| Clone on non-empty PGDATA | Guarded by `PG_VERSION` check | Skipped. No action. |
-| PG fails to start after successful fetch | Database inconsistent | Auto-rollback to `.pre-restore`. |
+| `backup-fetch` fails | Existing PGDATA untouched | Container exits before PostgreSQL starts. Fix the source and retry. |
+| Restore env remains after success | Restored PGDATA active | Completed request marker causes future restarts to skip. |
+| Restore request has no request ID | Existing PGDATA untouched | Container exits before PostgreSQL starts. |
+| Existing PGDATA without overwrite gate | Existing PGDATA untouched | Container exits with a clear error. |
+| Stale `pre-restore` exists | Existing PGDATA untouched | Container exits. Operator must keep, remove, or roll back explicitly. |
+| WAL replay fails during PostgreSQL startup | Restored PGDATA active, previous data in `pre-restore` | Container fails. Set `PG_RESTORE_ROLLBACK=true` and restart to revert locally. |
+| Target time before oldest backup | Existing PGDATA untouched | `backup-fetch` fails. |
+| Target time after latest WAL | Restored PGDATA active | PostgreSQL replays available WAL and promotes at the last reachable point. Monitor logs to confirm recovery endpoint. |
 
 ## Testing
 
-### E2E — `tests/backup-restore.test.js`
+Restore behavior belongs in E2E tests because correctness depends on PostgreSQL, WAL-G, object storage, and WAL replay.
 
-Restore scenarios run in the shared PG + MinIO container pair, consuming backups created by the backup test group (see [testing.md](testing.md)):
+`tests/backup-restore.test.js` should cover:
 
-- **PITR**: insert A → archive → insert B → `restore.sh --target-time <between A and B>` → A exists, B doesn't
-- **DR (latest)**: insert data → `restore.sh` (no target) → all data present
-- **Rollback on fetch failure**: mock `backup-fetch` failure → PG running on old data
-- **Rollback on start failure**: mock PG start failure after fetch → PG running on old data
-- **Idempotent stop**: run `restore.sh` when PG already stopped → no error
-- **Empty PGDATA**: run `restore.sh` on empty dir → no `.pre-restore`, fetch + start
-- **Recovery settings cleanup**: after PITR restore → `postgresql.auto.conf` does not contain `recovery_target_time` or `restore_command`
-- **Bootstrap flag**: `restore.sh --bootstrap --from <prefix>` on empty PGDATA → `recovery.signal` exists, PGDATA populated, PG is NOT running
+- startup restore to latest from the instance prefix
+- startup PITR from the instance prefix
+- restore over existing PGDATA requires `PG_RESTORE_OVERWRITE=true`
+- explicit restore and rollback require `PG_RESTORE_REQUEST_ID`
+- completed restore request IDs are skipped on restart
+- failed fetch leaves existing PGDATA untouched
+- explicit rollback swaps `pre-restore` back
+- completed rollback request IDs are skipped on restart
+- clone from `WALG_CLONE_FROM` into an empty PVC
+- clone restart does not overwrite existing PGDATA
 
-### E2E — `tests/clone.test.js`
-
-Spins up two pg-phoenix-image containers + MinIO via Testcontainers (see [testing.md](testing.md)):
-
-- **Clone latest**: instance A with data → instance B with `WALG_CLONE_FROM=A` → B has A's data
-- **Clone with PITR**: insert at T1 and T2 → clone with `WALG_CLONE_TARGET_TIME=T1` → only T1 data
-- **Clone idempotency**: restart B → `WALG_CLONE_FROM` ignored (PGDATA non-empty)
-- **Clone bad source**: nonexistent prefix → container fails with clear error
+Contract tests should remain limited to source prefix validation, argument parsing, and generated restore settings that are hard to diagnose through container logs.
