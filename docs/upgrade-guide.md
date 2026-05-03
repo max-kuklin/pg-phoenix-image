@@ -122,8 +122,10 @@ Clone production, then upgrade the clone:
 ```yaml
 # 1. Deploy a clone
 env:
-  - name: WALG_CLONE_FROM
+  - name: PG_RESTORE_FROM
     value: "s3://bucket/pg-phoenix-image-prod/18"
+  - name: PG_RESTORE_REQUEST_ID
+    value: "upgrade-test-clone-2026-05-03"
   - name: WALG_S3_PREFIX
     value: "s3://bucket/pg-phoenix-image-staging"
 

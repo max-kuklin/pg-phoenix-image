@@ -55,17 +55,19 @@ For a new StatefulSet with an empty PVC:
 
 ```yaml
 env:
-  - name: WALG_CLONE_FROM
+  - name: PG_RESTORE_FROM
     value: "s3://bucket/source-instance/18"
-  - name: WALG_CLONE_TARGET_TIME
+  - name: PG_RESTORE_REQUEST_ID
+    value: "staging-refresh-2026-05-03"
+  - name: PG_RESTORE_TARGET_TIME
     value: "2026-02-12 09:00:00 UTC"
   - name: WALG_S3_PREFIX
     value: "s3://bucket/new-instance"
 ```
 
-`WALG_CLONE_FROM` must include the source PostgreSQL major suffix. `WALG_S3_PREFIX` remains the destination instance's own backup prefix; after startup, backups are written under the destination prefix with the current major suffix appended by the image.
+`PG_RESTORE_FROM` must include the source PostgreSQL major suffix. `WALG_S3_PREFIX` remains the destination instance's own backup prefix; after startup, backups are written under the destination prefix with the current major suffix appended by the image.
 
-Remove `WALG_CLONE_FROM` and `WALG_CLONE_TARGET_TIME` after the clone has booted successfully.
+Remove `PG_RESTORE_FROM`, `PG_RESTORE_REQUEST_ID`, and `PG_RESTORE_TARGET_TIME` after the clone has booted successfully.
 
 ## Cross-Instance Restore Over Existing Data
 

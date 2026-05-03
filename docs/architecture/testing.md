@@ -32,7 +32,7 @@ Use this layer for:
 
 - logger formatting, levels, and stderr-only output
 - shell-safe generation of `/etc/walg-env.sh`
-- env validation for `ARCHIVE_TIMEOUT`, `BACKUP_SCHEDULE`, and clone source prefixes
+- env validation for `ARCHIVE_TIMEOUT`, `BACKUP_SCHEDULE`, and restore source prefixes
 - storage backend selection and version suffixing for `WALG_S3_PREFIX`, `WALG_GS_PREFIX`, and `WALG_AZ_PREFIX`
 - argument parsing for `restore.sh`
 

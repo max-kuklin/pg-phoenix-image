@@ -18,7 +18,7 @@ Before deploying the new image with `PG_UPGRADE=true`:
 
 1. **WAL-G compatibility** — verify the pinned WAL-G version (`WALG_VERSION` build arg) supports the target PG major version. Check [WAL-G release notes](https://github.com/wal-g/wal-g/releases). If a WAL-G upgrade is needed, do it in a separate image build first.
 2. **Debian release match** — confirm `postgres:N` and `postgres:N+1` use the same Debian release (e.g. both bookworm). If not, the binary stash approach won't work — stashed binaries will fail with `libssl`/`libreadline` soname mismatches. Fall back to a two-image init-container approach.
-3. **Test on a clone first** — use `WALG_CLONE_FROM` to spin up a copy of production, then upgrade the clone. Catches extension incompatibilities, locale issues, and `pg_upgrade --check` failures without risking the real instance.
+3. **Test on a clone first** — use `PG_RESTORE_FROM` with an empty PVC to spin up a copy of production, then upgrade the clone. Catches extension incompatibilities, locale issues, and `pg_upgrade --check` failures without risking the real instance.
 4. **PVC headroom** — ensure at least 2× PGDATA free space. `pg_upgrade --link` uses hard links (minimal extra), but the swap step retains `$PGDATA.old` until post-upgrade cleanup. See [image.md](image.md) PVC sizing table.
 5. **Verify recent backup** — the upgrade script refuses to proceed without a verified WAL-G backup within `PG_UPGRADE_BACKUP_MAX_AGE` (default 3600s). Confirm `wal-g backup-list` shows a recent entry, or let the upgrade script force one.
 

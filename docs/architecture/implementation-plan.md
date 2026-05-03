@@ -54,7 +54,7 @@ The entrypoint WAL-G setup is implemented in this phase because backup E2E needs
 
 Entrypoint ties the image together: version check, binary stash, startup restore selection, and handoff to the official PostgreSQL entrypoint. WAL-G backup setup is already covered by Phase 3 because backup E2E depends on it. Pure env/path decisions can have contracts, but process behavior belongs in `startup.test.js`.
 
-`clone.test.js` validates the data result of `WALG_CLONE_FROM` through startup restore; `startup.test.js` only needs to prove that the entrypoint selects the restore path and respects the overwrite/rollback gates.
+`clone.test.js` validates the data result of `PG_RESTORE_FROM` with an empty PVC; `startup.test.js` only needs to prove that the entrypoint selects the restore path and respects the overwrite/rollback gates.
 
 ## Phase 5: Upgrade
 

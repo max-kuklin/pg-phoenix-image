@@ -53,11 +53,11 @@ Sibling moves on the same PVC avoid cross-device copies and make the final direc
 | Decision | Choice | Alternatives | Rationale |
 |---|---|---|---|
 | Restore timing | Startup-only | `kubectl exec restore.sh` against a live pod | Aligns with container lifecycle. PostgreSQL remains PID 1 and the pod restart is the operational boundary. |
-| Existing data guard | Require `PG_RESTORE_OVERWRITE=true` | Overwrite whenever restore env is present | Prevents an accidental manifest change from replacing a live PVC. Clone into an empty PVC does not need the overwrite gate. |
+| Existing data guard | Require `PG_RESTORE_OVERWRITE=true` when PGDATA exists | Overwrite whenever restore env is present | Prevents an accidental manifest change from replacing a live PVC. Clone into an empty PVC does not need the overwrite gate. |
 | Restore idempotency | Require `PG_RESTORE_REQUEST_ID` for explicit restore and rollback | Trust operators to remove restore env before restart | Restore env can remain in a StatefulSet during retries or operational cleanup. A durable request marker makes repeated restarts skip an already-completed request instead of restoring recursively. |
 | Restore staging | Fetch into `restore-tmp`, then swap | Move PGDATA first, fetch directly into PGDATA | Keeps existing data untouched until WAL-G has produced a complete fetched directory. |
 | Local rollback | Keep `pre-restore` and require explicit rollback env | Auto-rollback after PostgreSQL startup failure | Once the entrypoint execs PostgreSQL, the container lifecycle owns failure handling. Explicit rollback is predictable and auditable. |
-| Cross-instance restore | Full version-scoped `PG_RESTORE_FROM` / `WALG_CLONE_FROM` | Reuse the instance write prefix | The restore source and the instance archive destination are different concepts. Source prefixes must already include the PostgreSQL major segment, such as `/18`. |
+| Cross-instance restore | Full version-scoped `PG_RESTORE_FROM` | Reuse the instance write prefix | The restore source and the instance archive destination are different concepts. Source prefixes must already include the PostgreSQL major segment, such as `/18`. |
 | PITR action | `recovery_target_action = 'promote'` | `pause` | Startup should produce a running primary without requiring a manual SQL resume. |
 
 ## Configuration
@@ -70,10 +70,8 @@ Sibling moves on the same PVC avoid cross-device copies and make the final direc
 | `PG_RESTORE_OVERWRITE` | unset | Must be `true` when restoring over existing PGDATA. |
 | `PG_RESTORE_REQUEST_ID` | unset | Required idempotency key for `PG_RESTORE`, `PG_RESTORE_FROM`, and `PG_RESTORE_ROLLBACK`. Change it to request another restore. |
 | `PG_RESTORE_ROLLBACK` | unset | Set to `true` to move `pre-restore` back to PGDATA during startup. |
-| `WALG_CLONE_FROM` | unset | Compatibility alias for clone-from-source. It only runs when PGDATA is empty. |
-| `WALG_CLONE_TARGET_TIME` | unset | Compatibility alias for clone PITR target. |
 
-`PG_RESTORE_FROM` and `WALG_CLONE_FROM` must be full version-scoped paths. The image appends the version suffix only to the instance's own archive prefix, not to arbitrary restore sources.
+`PG_RESTORE_FROM` must be a full version-scoped path. The image appends the version suffix only to the instance's own archive prefix, not to arbitrary restore sources.
 
 `PG_RESTORE_REQUEST_ID` may contain letters, numbers, dot, underscore, and dash. Treat it as an operator-controlled idempotency key, not as a timestamp parser or generated secret. Examples: `incident-2026-05-03-latest`, `pitr-2026-05-03-1430`, `rollback-incident-2026-05-03`.
 
@@ -107,7 +105,6 @@ Entrypoint performs restore before PostgreSQL starts:
 - `PG_RESTORE=true` triggers restore from the instance's own prefix.
 - `PG_RESTORE_FROM` triggers restore from a source prefix.
 - `PG_RESTORE_REQUEST_ID` is passed as the restore idempotency key.
-- `WALG_CLONE_FROM` triggers restore only when PGDATA is empty.
 - `PG_RESTORE_ROLLBACK=true` swaps `pre-restore` back before handoff.
 
 After restore preparation, the official entrypoint starts PostgreSQL. WAL replay and promotion are normal PostgreSQL startup behavior.
@@ -139,7 +136,7 @@ Restore behavior belongs in E2E tests because correctness depends on PostgreSQL,
 - failed fetch leaves existing PGDATA untouched
 - explicit rollback swaps `pre-restore` back
 - completed rollback request IDs are skipped on restart
-- clone from `WALG_CLONE_FROM` into an empty PVC
-- clone restart does not overwrite existing PGDATA
+- clone from `PG_RESTORE_FROM` into an empty PVC
+- restart after clone skips by completed request ID
 
 Contract tests should remain limited to source prefix validation, argument parsing, and generated restore settings that are hard to diagnose through container logs.

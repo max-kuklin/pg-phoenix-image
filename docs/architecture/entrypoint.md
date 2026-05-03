@@ -27,8 +27,6 @@ entrypoint.sh
   │   │   └─ restore.sh with RESTORE_REQUEST_ID=$PG_RESTORE_REQUEST_ID [restore.md]
   │   ├─ PG_RESTORE=true or PG_RESTORE_FROM set?
   │   │   └─ restore.sh with RESTORE_REQUEST_ID=$PG_RESTORE_REQUEST_ID [--from ...]
-  │   ├─ WALG_CLONE_FROM set + PGDATA empty?
-  │   │   └─ restore.sh --from $WALG_CLONE_FROM [--target-time ...]
   │   └─ otherwise skip
   │
   ├─ 5. BACKUP SETUP
@@ -69,8 +67,6 @@ No configuration specific to the entrypoint itself. It reads env vars documented
 | `WALG_S3_PREFIX` / `WALG_GS_PREFIX` / `WALG_AZ_PREFIX` | Backup path (first set wins, version-suffixed at runtime) | [backup.md](backup.md) |
 | `PG_RESTORE` / `PG_RESTORE_FROM` / `PG_RESTORE_TARGET_TIME` / `PG_RESTORE_REQUEST_ID` | Startup restore | [restore.md](restore.md) |
 | `PG_RESTORE_OVERWRITE` / `PG_RESTORE_ROLLBACK` | Restore overwrite and local rollback gates | [restore.md](restore.md) |
-| `WALG_CLONE_FROM` | Clone source prefix | [restore.md](restore.md) |
-| `WALG_CLONE_TARGET_TIME` | Clone PITR target | [restore.md](restore.md) |
 | `BACKUP_SCHEDULE` | Cron expression | [backup.md](backup.md) |
 | `LOG_LEVEL` | Script verbosity (`ERROR`, `WARN`, `INFO`, `DEBUG`) | [logging.md](logging.md) |
 
@@ -104,8 +100,8 @@ Each scenario uses a fresh container with different env vars (see [testing.md](t
 - same `PG_RESTORE_REQUEST_ID` after completed restore → restore skipped
 - `PG_RESTORE_ROLLBACK=true` → `pre-restore` is restored before handoff
 - same rollback request ID after completed rollback → rollback skipped
-- `WALG_CLONE_FROM` + empty PGDATA → clone triggered
-- `WALG_CLONE_FROM` + existing PGDATA → clone skipped
+- `PG_RESTORE_FROM` + empty PGDATA → clone/restore triggered
+- `PG_RESTORE_FROM` + existing PGDATA + no overwrite gate → container refuses to start
 - Version match → normal startup
 - Version mismatch + no gate → container refuses to start
 - Binary stash exists after startup

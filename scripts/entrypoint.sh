@@ -114,13 +114,6 @@ run_restore_if_requested() {
 
   if [[ -n "${PG_RESTORE_FROM:-}" ]]; then
     args+=(--from "$PG_RESTORE_FROM")
-  elif [[ -n "${WALG_CLONE_FROM:-}" ]]; then
-    if pgdata_exists; then
-      return 0
-    fi
-
-    args+=(--from "$WALG_CLONE_FROM" --bootstrap)
-    target_time="${WALG_CLONE_TARGET_TIME:-}"
   elif [[ "${PG_RESTORE:-}" != "true" ]]; then
     return 0
   fi
