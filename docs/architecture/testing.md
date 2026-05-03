@@ -1,140 +1,177 @@
-# E2E Testing
+# Testing Strategy
 
 ## Purpose
 
-Verify every image feature end-to-end: real PostgreSQL, real WAL-G, real MinIO. No mocks for core paths. Tests run via `npm test` (Vitest + Testcontainers).
+Keep the TDD loop practical for a PostgreSQL image whose real behavior depends on Docker, Debian, WAL-G, cron, and PostgreSQL itself. The suite has two layers:
 
-## Concept
+| Layer | Scope | Default use |
+|---|---|---|
+| Script contract tests | Small Bash contracts that are expensive to debug through E2E output | Quoting, validation, parsing, prefix logic |
+| Image and E2E tests | Real container behavior with PostgreSQL, WAL-G, and MinIO | Main development and pre-merge confidence |
 
-Container startup dominates test runtime (~5-10s per PG, ~3-5s per MinIO). Individual assertions are milliseconds. Optimization = fewer container starts.
+Script contract tests are intentionally limited. They are not a separate mock-heavy unit-test architecture for Bash scripts. Most script behavior should be proved through real containers.
 
-Tests are grouped by **container topology** (what infrastructure they share), not by feature. A single PG container serves image checks, metrics queries, and slow-query-log config changes sequentially — rather than starting three separate containers for three features.
+## Commands
 
-Five test files, each managing its own container lifecycle:
+| Command | Runs | Use when |
+|---|---|---|
+| `npm test -- tests/contracts` | Script contract tests in Linux | Changing shared Bash validation/quoting/parsing |
+| `docker build -t pg-phoenix-image:test .` | Local image build | Before any image or E2E test |
+| `npm test -- tests/pg-only.test.js` | Single-PG image smoke suite | Checking image startup/config/runtime surface |
+| `npm test -- tests/startup.test.js` | Entrypoint scenarios | Changing startup env behavior |
+| `npm test -- tests/backup-restore.test.js` | PG + MinIO backup/restore suite | Working on WAL-G backup or restore |
+| `npm test` | Full suite | Before merge or release |
 
-```
+Integration tests use the prebuilt `pg-phoenix-image:test` tag by default. Tests should not rebuild the image per file. The upgrade suite is the exception because it intentionally builds old/new PostgreSQL variants from the Dockerfile.
+
+## Layer 1: Script Contract Tests
+
+Script contract tests validate only Bash behavior that is pure, fragile, and hard to diagnose from container logs. They run in Linux, not directly on the Windows host. The test runner should execute them through a small Debian/Bash container or equivalent Linux environment so shell behavior matches the image.
+
+Use this layer for:
+
+- logger formatting, levels, and stderr-only output
+- shell-safe generation of `/etc/walg-env.sh`
+- env validation for `ARCHIVE_TIMEOUT`, `BACKUP_SCHEDULE`, and clone source prefixes
+- storage backend selection and version suffixing for `WALG_S3_PREFIX`, `WALG_GS_PREFIX`, and `WALG_AZ_PREFIX`
+- argument parsing for `restore.sh`
+
+Do not use this layer for:
+
+- PostgreSQL lifecycle behavior
+- `pg_ctl`, `pg_isready`, or signal handling
+- `wal-g backup-push`, `wal-g backup-fetch`, or WAL replay
+- cron actually running jobs
+- file ownership/permission behavior that depends on the image user
+- major upgrade execution
+
+Those belong in image or E2E tests.
+
+Recommended structure:
+
+```text
 tests/
-├── helpers/
-│   └── containers.js          # startPg(), startPgWithMinio() factories
-├── pg-only.test.js            # image + metrics + slow-query-log
-├── backup-restore.test.js     # backup → restore (natural dependency)
-├── startup.test.js            # fresh container per scenario (different env vars)
-├── clone.test.js              # 2× PG + MinIO
-└── upgrade.test.js            # 2× PG (two major versions) + MinIO
+  contracts/
+    logger.test.js
+    env-file.test.js
+    prefix.test.js
+    restore-args.test.js
+  helpers/
+    shell.js
 ```
 
-## Design Decisions
+`tests/helpers/shell.js` centralizes running Bash inside Linux, mounting the repo, setting temp dirs, and capturing stdout/stderr. Fake external binaries should be used only when the contract under test is pure Bash behavior. If a test needs a realistic PostgreSQL or WAL-G process, it is not a contract test.
 
-| Decision | Choice | Alternatives | Rationale |
-|---|---|---|---|
-| Runner | Vitest | Jest, node:test | Faster startup, built-in file-level parallelism, same `describe`/`test`/`beforeAll` API as Jest. |
-| Container library | Testcontainers | Docker Compose, custom scripts | Programmatic lifecycle per `describe` block. No Compose files, no shared state between test files. Container config (env vars, mounts) is colocated with the tests that use it. |
-| Grouping | By container topology | By feature (1 file per feature) | Reduces ~24 container starts to ~14 by sharing PG instances across features that can coexist. Merging backup + restore avoids redundant seed-then-backup setup. |
-| File parallelism | Enabled (Vitest default) | Sequential files | All 5 files start simultaneously. Wall-clock time ≈ slowest file (~60s for upgrade) instead of sum of all files. |
-| Within-file execution | Sequential | Concurrent tests | Tests within a file share container state. INSERT → backup → restore must be ordered. `concurrent: false` (Vitest default). |
-| Workspace projects | Not used | Vitest workspace with `globalSetup` + `provide`/`inject` | 5 files don't warrant workspace config overhead. `beforeAll`/`afterAll` per `describe` is simpler and sufficient. |
+As scripts grow, shared pure behavior should move into small sourceable files under `scripts/lib/`. The executable scripts should remain thin orchestration layers.
 
-### Why Not One File Per Feature?
+## Layer 2: Image and E2E Tests
 
-Eight separate files (image, metrics, slow-query-log, backup, restore, clone, startup, upgrade) would start ~24 containers. Merging by topology saves ~10 starts with no complexity cost:
+This is the main test layer. It proves the image behaves correctly with real PostgreSQL and, where needed, real WAL-G and MinIO.
 
-- **image + metrics + slow-query-log → `pg-only.test.js`**: All need a single PG container. Image checks and metrics are read-only. Slow-query-log mutates `ALTER SYSTEM` settings but doesn't affect prior tests.
-- **backup + restore → `backup-restore.test.js`**: Every restore needs a backup in MinIO. Running them sequentially in one file means backup tests create the state that restore tests consume — no redundant seeding.
-- **startup stays separate**: Each scenario needs different env vars (no WAL-G, with WAL-G, with clone, version mismatch). Can't share containers.
+Top-level test files are grouped by container topology, not by feature, to minimize container starts:
 
-## Test Files
+```text
+tests/
+  helpers/
+    containers.js
+  pg-only.test.js
+  startup.test.js
+  backup-restore.test.js
+  clone.test.js
+  upgrade.test.js
+```
 
-### `pg-only.test.js` — Single PG Container
+### `pg-only.test.js`: Image Smoke
 
-Covers: image validation, `pg_stat_statements`, slow-query-log config.
-
-One shared PG container (+ one fresh container for `conf.d/` mount test). Tests run sequentially because slow-query-log mutates global config via `ALTER SYSTEM`.
+One shared PostgreSQL container where possible. This suite should fail quickly when the Dockerfile, entrypoint handoff, config path, extension setup, or bundled binaries are broken.
 
 | Group | Scenarios | State |
 |---|---|---|
 | Image | PG connects, `SHOW config_file`, WAL-G exists, cron exists | Read-only |
-| Image (conf.d) | Mount `work_mem=128MB` → `SHOW work_mem` | Fresh container with bind mount |
-| Metrics | Extension exists, call counts, `track=all`, `max` value | Mutates `pg_stat_statements` (isolated view) |
-| Slow-query-log | Default off, enable at 500ms, change to 100ms, disable, log format | Sequential `ALTER SYSTEM` + `pg_reload_conf` |
+| Config override | Mount `work_mem=128MB` into `conf.d/`, then verify `SHOW work_mem` | Fresh container |
+| Metrics | `pg_stat_statements` exists, tracks calls, expected settings are active | Mutates `pg_stat_statements` view only |
+| Slow query log | Default off, enable/change/disable via config reload, log format visible | Sequential global config changes |
 
-### `backup-restore.test.js` — PG + MinIO
+### `startup.test.js`: Entrypoint Scenarios
 
-Covers: backup creation, WAL archiving, delta/retention, restore (PITR, DR, rollback), bootstrap.
+Each scenario uses a new container because entrypoint behavior is mostly env-driven.
 
-One PG + MinIO pair. Backup tests seed the data that restore tests consume.
+| Scenario | Topology |
+|---|---|
+| No WAL-G env starts plain PostgreSQL | PG only |
+| WAL-G prefix with valid schedule configures archiving and cron | PG + MinIO |
+| WAL-G prefix without `BACKUP_SCHEDULE` refuses startup | PG + MinIO |
+| Invalid `ARCHIVE_TIMEOUT` refuses startup | PG + MinIO |
+| Invalid `BACKUP_SCHEDULE` refuses startup | PG + MinIO |
+| Clone env on empty PGDATA triggers bootstrap restore | 2x PG + MinIO |
+| Clone env on existing PGDATA is skipped | PG + MinIO |
+| Version mismatch without `PG_UPGRADE` refuses startup | PG only |
+| Binary stash exists after startup | PG only |
+| Postgres receives signals correctly after entrypoint handoff | PG only |
+
+### `backup-restore.test.js`: PG + MinIO
+
+One shared PG + MinIO pair. Backup tests create the state that restore tests consume.
 
 | Group | Scenarios | State |
 |---|---|---|
-| Backup | Cron scheduled, base backup, WAL archive, delta, retention, `archive_timeout`, version-prefixed path | Sequential — each builds on prior backups |
-| Backup (no creds) | No AWS credentials → graceful skip | Fresh PG container (no MinIO) |
-| Restore | PITR, DR latest, rollback on fetch/start failure, idempotent stop, empty PGDATA, recovery settings cleanup, bootstrap flag | Sequential — each restore replaces PGDATA |
+| Backup | Cron scheduled, base backup, WAL archive, delta, retention, `archive_timeout`, version-prefixed path | Sequential |
+| Backup without creds | No WAL-G credentials configured, graceful skip | Fresh PG container |
+| Restore | PITR, latest restore, rollback on fetch/start failure, idempotent stop, empty PGDATA, bootstrap flag | Sequential |
 
-### `startup.test.js` — Fresh Container Per Scenario
+### `clone.test.js`: Source + Target + MinIO
 
-Covers: entrypoint behavior under different env var combinations.
-
-Each `describe` block starts its own container(s) because env vars are set at container creation time — can't reuse a running PG with different config.
-
-| Scenario | Topology | State |
-|---|---|---|
-| No env vars → plain PG, no cron | PG only | Read-only |
-| `WALG_S3_PREFIX` set → cron + archiving | PG + MinIO | Read-only |
-| `WALG_S3_PREFIX` set without `BACKUP_SCHEDULE` → refuse to start | PG + MinIO | Read-only |
-| `WALG_S3_PREFIX` set with invalid `ARCHIVE_TIMEOUT` → refuse to start | PG + MinIO | Read-only |
-| `WALG_CLONE_FROM` + empty PGDATA → clone | 2× PG + MinIO | Mutates (clone) |
-| `WALG_CLONE_FROM` + existing PGDATA → skip | PG + MinIO | Read-only |
-| Version match → normal startup | PG only | Read-only |
-| Version mismatch + no gate → refuse | PG only | Read-only |
-| Invalid `BACKUP_SCHEDULE` → refuse to start | PG + MinIO | Read-only |
-| Binary stash exists after startup | PG only | Read-only |
-| PG is PID 1 (exec'd correctly) | PG only | Read-only |
-
-### `clone.test.js` — 2× PG + MinIO
-
-Covers: cross-instance clone via `WALG_CLONE_FROM` — verifies data fidelity and PITR correctness. (`startup.test.js` only checks that the entrypoint triggers the clone; this file validates the actual data.)
-
-Instance A (source) is seeded and backed up once. Instance B (target) is created per scenario.
+Validates cross-instance clone behavior. `startup.test.js` checks that clone is triggered; this file checks data fidelity.
 
 | Scenario | State |
 |---|---|
-| Clone latest → B has A's data | Mutates (creates B) |
-| Clone PITR → only T1 data | Mutates (creates B with target time) |
-| Clone idempotency → restart B, PGDATA untouched | Read-only (depends on prior clone) |
-| Bad source prefix → clear error | Fresh container |
+| Clone latest contains source data | Creates target |
+| Clone PITR excludes later source data | Creates target |
+| Restart after clone does not overwrite PGDATA | Depends on prior clone |
+| Bad source prefix fails clearly | Fresh container |
 
-### `upgrade.test.js` — 2× PG (Two Major Versions) + MinIO
+### `upgrade.test.js`: Two PostgreSQL Majors + MinIO
 
-Covers: major-version upgrade flow, rollback on failure, binary stash lifecycle.
+Slowest suite. It builds old/new image variants via the Dockerfile `PG_BASE` build arg. Defaults are controlled by `PG_TEST_OLD` and `PG_TEST_NEW`.
 
-Heaviest file. Needs PG containers with two different major versions. The Dockerfile accepts a `PG_BASE` build arg (defaults to `postgres:18`). The test helper reads `PG_TEST_OLD` (default: `17`) and `PG_TEST_NEW` (default: `18`) env vars and builds both images using Testcontainers' `GenericContainer.fromDockerfile()`: the "old" image passes `--build-arg PG_BASE=postgres:$PG_TEST_OLD`, and the "new" image passes `--build-arg PG_BASE=postgres:$PG_TEST_NEW`. No registry pulls, no file patching — both images are built locally during the test run. Override via CLI: `PG_TEST_OLD=16 PG_TEST_NEW=17 npm test`. Defaults track the current production target pair (both released and stable).
+The full upgrade suite is a pre-merge/release gate, not the normal edit loop. CI should cache Docker layers for this suite because the Dockerfile installs packages and downloads WAL-G.
 
 | Group | Scenarios | State |
 |---|---|---|
-| Upgrade flow | Mismatch without gate (refuse), full upgrade (data intact), no backup (refuse), rollback on `pg_upgrade` failure, rollback on start failure | Sequential — post-upgrade checks depend on upgrade completing |
-| Post-upgrade | Backup prefix switch to `.../19`, `ANALYZE` ran, stash lifecycle, `PG_UPGRADE` left set → no re-upgrade | Read-only checks after upgrade |
-| Binary stash | Fresh start → created, restart → unchanged, checksum matches, minor upgrade → updated | Mixed — some need fresh containers |
+| Upgrade gate | Mismatch without gate, no backup, full upgrade | Sequential |
+| Rollback | `pg_upgrade` failure and post-upgrade start failure | Sequential |
+| Post-upgrade | Data intact, prefix switched, analyze ran, no repeat upgrade | Read-only checks |
+| Binary stash | Created, reused on restart, updated on minor image change | Mixed |
 
-## Container Helpers
+## Test Helpers
 
-`tests/helpers/containers.js` centralizes image name, common env vars, and wait strategies. Two factory functions:
+`tests/helpers/containers.js` centralizes image name, env defaults, wait strategies, and container cleanup. It exposes:
 
-- `startPg(overrides?)` — single PG container. Defaults: `POSTGRES_PASSWORD=test`, waits for `pg_isready`.
-- `startPgWithMinio(overrides?)` — PG + MinIO + bucket init. Adds WAL-G env vars, creates the test bucket, waits for both services.
+- `startPg(overrides?)`: single PostgreSQL container, default `POSTGRES_PASSWORD=test`
+- `startPgWithMinio(overrides?)`: PostgreSQL plus MinIO, bucket initialization, and WAL-G env
 
-Both return handles for `stop()` in `afterAll`. Each `describe` block calls the factory it needs — no shared global state between files.
+`tests/helpers/shell.js` centralizes Linux Bash execution for script contract tests.
 
-For tests needing fresh containers mid-file (e.g., backup with no credentials, clone with bad source), a nested `describe` block with its own `beforeAll`/`afterAll` handles the lifecycle.
-
-## Log Assertions
-
-Every test file verifies expected log output in container stderr — level, component tag, phase markers. This is woven into each suite rather than tested separately, since log output is a byproduct of every operation.
+Helpers should keep policy out of tests only when the policy is generic. Feature-specific expectations belong in the test file that exercises the feature.
 
 ## Vitest Configuration
 
-`vitest.config.js` at the project root:
+Root `vitest.config.js` should include:
 
 - `include: ['tests/**/*.test.js']`
-- `testTimeout: 120_000` — container operations and WAL replay can be slow
-- `hookTimeout: 60_000` — `beforeAll` container startup
-- `fileParallelism: true` — all 5 files run simultaneously
-- `sequence.concurrent: false` — tests within a file run in order
+- `testTimeout: 120_000` for container operations and WAL replay
+- `hookTimeout: 60_000` for container startup
+- file-level parallelism enabled for independent top-level suites
+- sequential execution within files that share container state
+
+Contract tests should stay few and focused. If they start requiring extensive fake process behavior, move that coverage to an image/E2E test.
+
+## Logging Assertions
+
+Every layer verifies logs at the level it can observe:
+
+- contract tests assert logger formatting, levels, and stderr routing
+- image smoke tests assert startup log shape and component tags
+- E2E tests assert operation-specific phase markers and error paths
+
+This avoids a separate logging-only integration suite while still treating log output as part of the operational contract.

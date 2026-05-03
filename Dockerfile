@@ -15,7 +15,7 @@ ARG WALG_SHA256=e56f515e6219f4d498e729023b404b4c9068a4deaebbaf95ac6f4cf6bcd1a783
 RUN set -eux; \
     apt-get update; \
     apt-get upgrade -y; \
-    apt-get install -y --no-install-recommends cron curl; \
+    apt-get install -y --no-install-recommends ca-certificates cron curl; \
     curl -fSL -o /tmp/wal-g.tar.gz \
         "https://github.com/wal-g/wal-g/releases/download/${WALG_VERSION}/wal-g-pg-ubuntu-20.04-amd64.tar.gz"; \
     echo "${WALG_SHA256}  /tmp/wal-g.tar.gz" | sha256sum -c -; \
