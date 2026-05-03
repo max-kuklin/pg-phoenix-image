@@ -91,7 +91,7 @@ Behavior:
 6. Refuse to overwrite existing PGDATA unless `RESTORE_OVERWRITE=true`.
 7. Refuse to proceed when stale `restore-tmp` or `pre-restore` directories would make the result ambiguous.
 8. Fetch `LATEST` into `restore-tmp`.
-9. Write `recovery.signal`, `restore_command`, and optional PITR settings into the fetched data.
+9. Write `recovery.signal`, `restore_command`, and optional PITR settings into the fetched data. When `--from` is used, `restore_command` overrides the active WAL-G prefix inline so WAL replay reads from the source prefix, while future archiving still uses the destination prefix from `/etc/walg-env.sh`.
 10. Move existing PGDATA to `pre-restore` when present.
 11. Move `restore-tmp` to PGDATA.
 12. Write a restore completion marker.

@@ -60,6 +60,19 @@ describe('restore script contracts', () => {
     expect(result.stderr).toContain('[restore] restore prepared for PostgreSQL startup');
   });
 
+  test('writes source prefix into restore command for cross-instance restore', async () => {
+    const result = await runBash(
+      [
+        ...scriptEnv,
+        'RESTORE_REQUEST_ID=cross-instance bash /workspace/scripts/restore.sh --from s3://bucket/source/18',
+        'grep -q "WALG_S3_PREFIX=" "$PGDATA/postgresql.auto.conf"',
+        'grep -q "s3://bucket/source/18" "$PGDATA/postgresql.auto.conf"'
+      ].join('; ')
+    );
+
+    expect(result.code).toBe(0);
+  });
+
   test('skips completed restore request id', async () => {
     const result = await runBash(
       [

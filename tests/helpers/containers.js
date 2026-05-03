@@ -18,7 +18,7 @@ export async function startPg(overrides = {}) {
   let builder = new GenericContainer(IMAGE_NAME)
     .withEnvironment(env)
     .withExposedPorts(5432)
-    .withWaitStrategy(Wait.forHealthCheck());
+    .withWaitStrategy(overrides.waitStrategy ?? Wait.forHealthCheck());
 
   if (overrides.bindMounts) {
     builder = builder.withBindMounts(overrides.bindMounts);
@@ -72,11 +72,10 @@ export async function queryPg(connection, text, params = []) {
   }
 }
 
-export async function startPgWithMinio() {
+export async function startMinio() {
   const network = await new Network().start();
 
   let minio;
-  let pgContainer;
 
   try {
     minio = await new GenericContainer(MINIO_IMAGE)
@@ -104,36 +103,61 @@ export async function startPgWithMinio() {
       .withWaitStrategy(Wait.forOneShotStartup())
       .start();
 
-    pgContainer = await startPg({
-      network,
-      networkAliases: ['pg'],
-      env: {
-        WALG_S3_PREFIX: `s3://${MINIO_BUCKET}/pg`,
-        AWS_ACCESS_KEY_ID: MINIO_ACCESS_KEY,
-        AWS_SECRET_ACCESS_KEY: MINIO_SECRET_KEY,
-        AWS_ENDPOINT: 'http://minio:9000',
-        AWS_REGION: 'us-east-1',
-        AWS_S3_FORCE_PATH_STYLE: 'true',
-        BACKUP_SCHEDULE: '0 0 * * *',
-        ARCHIVE_TIMEOUT: '60'
-      }
-    });
-
     return {
-      pg: pgContainer,
       minio,
       network,
       bucket: MINIO_BUCKET,
       stop: async () => {
-        await pgContainer?.stop();
         await minio?.stop();
         await network.stop();
       }
     };
   } catch (error) {
-    await pgContainer?.stop();
     await minio?.stop();
     await network.stop();
+    throw error;
+  }
+}
+
+export function minioPgEnv(prefix = `s3://${MINIO_BUCKET}/pg`) {
+  return {
+    WALG_S3_PREFIX: prefix,
+    AWS_ACCESS_KEY_ID: MINIO_ACCESS_KEY,
+    AWS_SECRET_ACCESS_KEY: MINIO_SECRET_KEY,
+    AWS_ENDPOINT: 'http://minio:9000',
+    AWS_REGION: 'us-east-1',
+    AWS_S3_FORCE_PATH_STYLE: 'true',
+    BACKUP_SCHEDULE: '0 0 * * *',
+    ARCHIVE_TIMEOUT: '60'
+  };
+}
+
+export async function startPgWithMinio(overrides = {}) {
+  const topology = await startMinio();
+  let pgContainer;
+
+  try {
+    pgContainer = await startPg({
+      network: topology.network,
+      networkAliases: ['pg'],
+      bindMounts: overrides.bindMounts,
+      env: {
+        ...minioPgEnv(),
+        ...overrides.env
+      }
+    });
+
+    return {
+      ...topology,
+      pg: pgContainer,
+      stop: async () => {
+        await pgContainer?.stop();
+        await topology.stop();
+      }
+    };
+  } catch (error) {
+    await pgContainer?.stop();
+    await topology.stop();
     throw error;
   }
 }

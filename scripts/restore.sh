@@ -21,6 +21,7 @@ restore_tmp="${RESTORE_TMP:-$pgdata_parent/restore-tmp}"
 pre_restore="${PRE_RESTORE:-$pgdata_parent/pre-restore}"
 failed_restore="${FAILED_RESTORE:-$pgdata_parent/failed-restore}"
 restore_state="${RESTORE_STATE_DIR:-$pgdata_parent/restore-state}"
+restore_prefix_name=
 
 set +e
 restore_parse_args "$@"
@@ -115,6 +116,9 @@ write_recovery_settings() {
   local restore_command
 
   restore_command=". $WALG_ENV_FILE && wal-g wal-fetch %f %p"
+  if [[ -n "$restore_from" ]]; then
+    restore_command=". $WALG_ENV_FILE && $restore_prefix_name=$(walg_shell_quote "$restore_from") wal-g wal-fetch %f %p"
+  fi
 
   {
     printf "restore_command = '%s'\n" "${restore_command//\'/\'\'}"
@@ -138,12 +142,12 @@ prepare_restore() {
   fi
 
   if [[ -n "$restore_from" ]]; then
-    prefix_name="$(walg_active_prefix_name || true)"
-    if [[ -z "$prefix_name" ]]; then
+    restore_prefix_name="$(walg_active_prefix_name || true)"
+    if [[ -z "$restore_prefix_name" ]]; then
       log_fatal "--from requires an active WAL-G prefix variable"
     fi
 
-    export "$prefix_name=$restore_from"
+    export "$restore_prefix_name=$restore_from"
   fi
 
   if [[ -e "$PGDATA/PG_VERSION" && "$RESTORE_OVERWRITE" != "true" ]]; then
