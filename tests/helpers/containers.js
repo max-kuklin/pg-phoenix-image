@@ -1,8 +1,13 @@
-import { GenericContainer, Wait } from 'testcontainers';
+import { GenericContainer, Network, Wait } from 'testcontainers';
 import pg from 'pg';
 
 export const IMAGE_NAME = process.env.PG_PHOENIX_IMAGE || 'pg-phoenix-image:test';
 export const POSTGRES_PASSWORD = 'test';
+export const MINIO_IMAGE = process.env.MINIO_IMAGE || 'minio/minio:RELEASE.2025-09-07T16-13-09Z';
+export const MINIO_CLIENT_IMAGE = process.env.MINIO_CLIENT_IMAGE || 'minio/mc:RELEASE.2025-08-13T08-35-41Z';
+export const MINIO_ACCESS_KEY = 'minioadmin';
+export const MINIO_SECRET_KEY = 'minioadmin';
+export const MINIO_BUCKET = 'pg-phoenix-test';
 
 export async function startPg(overrides = {}) {
   const env = {
@@ -17,6 +22,14 @@ export async function startPg(overrides = {}) {
 
   if (overrides.bindMounts) {
     builder = builder.withBindMounts(overrides.bindMounts);
+  }
+
+  if (overrides.network) {
+    builder = builder.withNetwork(overrides.network);
+  }
+
+  if (overrides.networkAliases) {
+    builder = builder.withNetworkAliases(...overrides.networkAliases);
   }
 
   const container = await builder.start();
@@ -36,7 +49,7 @@ export async function startPg(overrides = {}) {
       database: 'postgres'
     },
     query: (text, params) => queryPg({ host, port, password: env.POSTGRES_PASSWORD }, text, params),
-    exec: (command) => container.exec(command),
+    exec: (command, options) => container.exec(command, options),
     stop: () => container.stop()
   };
 }
@@ -60,5 +73,67 @@ export async function queryPg(connection, text, params = []) {
 }
 
 export async function startPgWithMinio() {
-  throw new Error('startPgWithMinio is implemented in the backup/restore phase');
+  const network = await new Network().start();
+
+  let minio;
+  let pgContainer;
+
+  try {
+    minio = await new GenericContainer(MINIO_IMAGE)
+      .withCommand(['server', '/data'])
+      .withEnvironment({
+        MINIO_ROOT_USER: MINIO_ACCESS_KEY,
+        MINIO_ROOT_PASSWORD: MINIO_SECRET_KEY
+      })
+      .withNetwork(network)
+      .withNetworkAliases('minio')
+      .withExposedPorts(9000)
+      .withWaitStrategy(Wait.forHttp('/minio/health/ready', 9000).forStatusCode(200))
+      .start();
+
+    await new GenericContainer(MINIO_CLIENT_IMAGE)
+      .withNetwork(network)
+      .withEntrypoint(['sh'])
+      .withCommand([
+        '-c',
+        [
+          `mc alias set local http://minio:9000 ${MINIO_ACCESS_KEY} ${MINIO_SECRET_KEY}`,
+          `mc mb --ignore-existing local/${MINIO_BUCKET}`
+        ].join(' && ')
+      ])
+      .withWaitStrategy(Wait.forOneShotStartup())
+      .start();
+
+    pgContainer = await startPg({
+      network,
+      networkAliases: ['pg'],
+      env: {
+        WALG_S3_PREFIX: `s3://${MINIO_BUCKET}/pg`,
+        AWS_ACCESS_KEY_ID: MINIO_ACCESS_KEY,
+        AWS_SECRET_ACCESS_KEY: MINIO_SECRET_KEY,
+        AWS_ENDPOINT: 'http://minio:9000',
+        AWS_REGION: 'us-east-1',
+        AWS_S3_FORCE_PATH_STYLE: 'true',
+        BACKUP_SCHEDULE: '0 0 * * *',
+        ARCHIVE_TIMEOUT: '60'
+      }
+    });
+
+    return {
+      pg: pgContainer,
+      minio,
+      network,
+      bucket: MINIO_BUCKET,
+      stop: async () => {
+        await pgContainer?.stop();
+        await minio?.stop();
+        await network.stop();
+      }
+    };
+  } catch (error) {
+    await pgContainer?.stop();
+    await minio?.stop();
+    await network.stop();
+    throw error;
+  }
 }

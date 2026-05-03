@@ -42,7 +42,7 @@ Runtime packages (via `apt-get install --no-install-recommends`):
 
 WAL-G installation:
 
-1. Download release tarball from GitHub (`wal-g-pg-ubuntu-20.04-amd64.tar.gz`)
+1. Download release tarball from GitHub (`wal-g-pg-20.04-amd64.tar.gz`)
 2. Extract binary to `/usr/local/bin/wal-g`
 3. Remove tarball and purge `curl`
 

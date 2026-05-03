@@ -53,7 +53,7 @@ After a major upgrade (18 → 19), the prefix automatically changes to `.../19`.
 
 Before doing any work, checks `pg_isready`. If PG is not accepting connections (first boot, shutdown in progress), logs a warning and exits 0 — cron will retry on the next trigger.
 
-Acquires an exclusive lock (`flock -n /var/run/backup.lock`) to prevent overlapping runs — if a prior backup is still running when cron fires again, the new invocation logs a warning and exits cleanly. The lock file lives on `/var/run` (tmpfs), so stale locks are impossible after container restart.
+Acquires an exclusive lock (`flock -n /var/run/postgresql/backup.lock`) to prevent overlapping runs — if a prior backup is still running when cron fires again, the new invocation logs a warning and exits cleanly. The lock file lives on `/var/run` (tmpfs), so stale locks are impossible after container restart.
 
 Sources WAL-G env, runs `wal-g backup-push`, then `wal-g delete retain FULL $BACKUP_RETAIN_FULL --confirm` for cleanup. On success, writes the current epoch to `/var/lib/postgresql/.last-backup-time` for external monitoring (see [metrics.md](metrics.md)).
 

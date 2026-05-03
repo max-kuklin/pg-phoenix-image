@@ -37,20 +37,22 @@ npm test -- tests/pg-only.test.js
 | Step | Deliverable | Depends on | Test |
 |---|---|---|---|
 | 6 | minimal backup/restore contracts: env file quoting, prefix selection, restore args | Phase 1 | contract tests only where pure Bash value exists |
-| 7 | `scripts/backup.sh`, `scripts/restore.sh` | Phase 2 plus step 6 | image still starts; contract tests pass |
+| 7 | `scripts/backup.sh`, `scripts/restore.sh`, and WAL-G startup setup in `entrypoint.sh` | Phase 2 plus step 6 | image still starts; contract tests pass |
 | 8 | `tests/backup-restore.test.js` | steps 6-7 | write E2E tests for real WAL-G/MinIO behavior |
 
 Backup and restore are primarily E2E-tested because their correctness depends on real PostgreSQL, WAL-G, object storage, WAL replay, and failure recovery. Contract tests cover only the Bash pieces that are hard to diagnose through container logs.
+
+The entrypoint WAL-G setup is implemented in this phase because backup E2E needs the real runtime contract: version-scoped prefix generation, `/etc/walg-env.sh`, `conf.d/walg.conf`, and `/etc/cron.d/pg-backup`.
 
 ## Phase 4: Entrypoint and Startup
 
 | Step | Deliverable | Depends on | Test |
 |---|---|---|---|
-| 9 | `scripts/entrypoint.sh` plus minimal contracts for env/prefix decisions | Phase 1 plus steps 6-7 | contract tests only where pure Bash value exists |
+| 9 | remaining `scripts/entrypoint.sh` orchestration: version checks, binary stash, clone detection | Phase 1 plus steps 6-7 | contract tests only where pure Bash value exists |
 | 10 | `tests/startup.test.js` | Phase 2 plus step 9 | write container scenarios for env-driven startup |
 | 11 | `tests/clone.test.js` | Phase 2 plus steps 7 and 9 | write E2E clone scenarios |
 
-Entrypoint ties the image together: version check, binary stash, version-prefixed backup path, clone detection, backup cron setup, and handoff to the official PostgreSQL entrypoint. Pure env/path decisions can have contracts, but process behavior belongs in `startup.test.js`.
+Entrypoint ties the image together: version check, binary stash, clone detection, and handoff to the official PostgreSQL entrypoint. WAL-G backup setup is already covered by Phase 3 because backup E2E depends on it. Pure env/path decisions can have contracts, but process behavior belongs in `startup.test.js`.
 
 `clone.test.js` validates the data result of `WALG_CLONE_FROM` through `restore.sh --bootstrap`; `startup.test.js` only needs to prove that the entrypoint selects the clone path.
 

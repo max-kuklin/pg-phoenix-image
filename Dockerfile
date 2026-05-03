@@ -8,8 +8,8 @@
 ARG PG_BASE=postgres:18
 FROM ${PG_BASE}
 
-ARG WALG_VERSION=v3.0.3
-ARG WALG_SHA256=e56f515e6219f4d498e729023b404b4c9068a4deaebbaf95ac6f4cf6bcd1a783
+ARG WALG_VERSION=v3.0.8
+ARG WALG_SHA256=8a0ca72ff3aa10d5a288cdb3e5b2a2e7bc6f8b4ffcf7b3046d718cfeee99a7e7
 
 # Runtime dependency (cron) + precompiled WAL-G binary
 RUN set -eux; \
@@ -17,10 +17,10 @@ RUN set -eux; \
     apt-get upgrade -y; \
     apt-get install -y --no-install-recommends ca-certificates cron curl; \
     curl -fSL -o /tmp/wal-g.tar.gz \
-        "https://github.com/wal-g/wal-g/releases/download/${WALG_VERSION}/wal-g-pg-ubuntu-20.04-amd64.tar.gz"; \
+        "https://github.com/wal-g/wal-g/releases/download/${WALG_VERSION}/wal-g-pg-20.04-amd64.tar.gz"; \
     echo "${WALG_SHA256}  /tmp/wal-g.tar.gz" | sha256sum -c -; \
     tar xzf /tmp/wal-g.tar.gz -C /usr/local/bin/; \
-    mv /usr/local/bin/wal-g-pg-ubuntu-20.04-amd64 /usr/local/bin/wal-g; \
+    mv /usr/local/bin/wal-g-pg-20.04-amd64 /usr/local/bin/wal-g; \
     chmod +x /usr/local/bin/wal-g; \
     rm /tmp/wal-g.tar.gz; \
     apt-get purge -y curl; \
@@ -29,6 +29,8 @@ RUN set -eux; \
 
 # Logging library
 COPY scripts/lib/logger.sh /usr/local/lib/logger.sh
+COPY scripts/lib/walg.sh /usr/local/lib/walg.sh
+COPY scripts/lib/restore-args.sh /usr/local/lib/restore-args.sh
 
 # Scripts
 COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh

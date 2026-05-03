@@ -40,6 +40,9 @@ jobs:
       - name: Run image smoke tests
         run: npm test -- tests/pg-only.test.js
 
+      - name: Run backup tests
+        run: npm test -- tests/backup-restore.test.js
+
       - name: Smoke test image
         shell: bash
         run: |

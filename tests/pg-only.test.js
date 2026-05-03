@@ -32,7 +32,7 @@ describe('pg-only image smoke', () => {
     const cron = await pgContainer.exec(['bash', '-lc', 'command -v cron']);
 
     expect(walg.exitCode).toBe(0);
-    expect(walg.stdout).toContain('wal-g version v3.0.3');
+    expect(walg.stdout).toContain('wal-g version v3.0.8');
     expect(cron.exitCode).toBe(0);
     expect(cron.stdout.trim()).toBe('/usr/sbin/cron');
   });
