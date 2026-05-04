@@ -47,6 +47,7 @@ Operator-initiated. Requires an explicit gate. For design details and rollback p
 - [ ] Test the upgrade in a non-production environment first (clone + upgrade)
 - [ ] Schedule a maintenance window — PG will be unavailable during upgrade
 - [ ] Adjust probes for the maintenance window — normal PostgreSQL is intentionally down until the upgrade finishes, so liveness must not restart the pod mid-upgrade. Temporarily disable liveness or use a `startupProbe` / failure threshold that covers backup, `pg_upgrade`, ANALYZE, and the first post-upgrade backup.
+- [ ] Decide how long to retain the old version backup prefix. The upgrade freezes `.../18` and starts writing to `.../19`; keep the old prefix through the rollback window.
 
 ### Procedure
 
@@ -91,6 +92,17 @@ The pod restarts. The entrypoint:
 kubectl logs -f -n db pg-phoenix-image-0
 ```
 
+Expected phase markers:
+
+- `starting PostgreSQL 18 for pre-upgrade backup`
+- `pushing pre-upgrade backup`
+- `checking PostgreSQL major upgrade`
+- `running PostgreSQL major upgrade`
+- `starting PostgreSQL 19 for post-upgrade verification`
+- `running post-upgrade analyze`
+- `pushing post-upgrade backup`
+- `major upgrade completed; remove PG_UPGRADE=true before the next rollout`
+
 **4. Remove the upgrade gate after success:**
 
 ```yaml
@@ -111,7 +123,18 @@ kubectl exec -n db pg-phoenix-image-0 -- psql -U postgres -c "SELECT count(*) FR
 
 # New backup exists
 kubectl exec -n db pg-phoenix-image-0 -- wal-g backup-list
+
+# Post-upgrade table stats were refreshed
+kubectl exec -n db pg-phoenix-image-0 -- psql -U postgres -c "SELECT relname, last_analyze FROM pg_stat_user_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema') ORDER BY last_analyze NULLS FIRST LIMIT 10;"
 ```
+
+Run one application-level smoke check before ending the maintenance window. The image proves PostgreSQL upgraded and backups resumed; it cannot prove application SQL semantics across a major PostgreSQL release.
+
+### After the Rollout
+
+- Remove `PG_UPGRADE=true` after the successful rollout. A restart with the gate still set is tolerated once PGDATA matches the image major, but leaving the gate in the manifest weakens the operator signal for the next major upgrade.
+- Keep the old backup prefix until the rollback window closes. Then delete it manually or with a scoped object-storage lifecycle rule.
+- Re-enable normal liveness settings if they were relaxed for the maintenance window.
 
 ### Rollback
 

@@ -349,13 +349,16 @@ swap_pgdata() {
 
 run_post_upgrade_analyze() {
   local analyze_script="$upgrade_work_dir/analyze_new_cluster.sh"
+  local bin_dir
 
+  log_phase "running post-upgrade analyze"
   if [[ ! -x "$analyze_script" ]]; then
-    log_warn "pg_upgrade did not create an executable analyze_new_cluster.sh"
+    bin_dir="$(new_bin_dir)"
+    as_postgres "$bin_dir/vacuumdb" --all --analyze-in-stages --missing-stats-only
+    as_postgres "$bin_dir/vacuumdb" --all --analyze-only
     return 0
   fi
 
-  log_phase "running post-upgrade analyze"
   as_postgres "$analyze_script"
 }
 

@@ -147,16 +147,41 @@ describe('major upgrade', () => {
       const version = await waitForQuery(upgraded.connection, 'SHOW server_version_num');
       const oldStash = await upgraded.exec(['bash', '-lc', `test ! -e /var/lib/postgresql/.pg-binaries/${OLD_MAJOR}`]);
       const newStash = await upgraded.exec(['bash', '-lc', `test -x /var/lib/postgresql/.pg-binaries/${NEW_MAJOR}/bin/pg_upgrade`]);
+      const logs = await execFileAsync('docker', ['logs', upgradeContainerName], {
+        maxBuffer: 1024 * 1024
+      });
       const listing = await listObjectStorageObjects(topology.network, 'upgrade');
 
       expect(data.rows[0].value).toBe('before upgrade');
       expect(version.rows[0].server_version_num.startsWith(NEW_MAJOR)).toBe(true);
+      expect(`${logs.stdout}${logs.stderr}`).toContain('[upgrade] ------ running post-upgrade analyze ------');
       expect(oldStash.exitCode).toBe(0);
       expect(newStash.exitCode).toBe(0);
       expect(listing).toContain(`/upgrade/${OLD_MAJOR}/`);
       expect(listing).toContain(`/upgrade/${NEW_MAJOR}/`);
-    } finally {
+
       await upgraded.stop();
+      upgraded = await startPg({
+        network: topology.network,
+        networkAliases: ['upgrade-target-restart'],
+        bindMounts,
+        env: {
+          ...objectStoragePgEnv('s3://pg-phoenix-test/upgrade'),
+          PGDATA: UPGRADE_PGDATA,
+          PG_UPGRADE: 'true'
+        },
+        waitStrategy: Wait.forHealthCheck(),
+        imageName: NEW_IMAGE,
+        startupTimeoutMs: 180_000
+      });
+
+      const afterRestart = await waitForQuery(upgraded.connection, 'SELECT value FROM upgrade_check WHERE id = 1');
+      const restartVersion = await waitForQuery(upgraded.connection, 'SHOW server_version_num');
+
+      expect(afterRestart.rows[0].value).toBe('before upgrade');
+      expect(restartVersion.rows[0].server_version_num.startsWith(NEW_MAJOR)).toBe(true);
+    } finally {
+      await upgraded?.stop();
       await execFileAsync('docker', ['rm', '-f', upgradeContainerName]).catch(() => {});
     }
   }, 10 * 60_000);

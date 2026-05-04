@@ -80,8 +80,9 @@ describe('script stubs contract', () => {
       'printf "%s\\n" "#!/usr/bin/env bash" "mkdir -p \\"\\${@: -1}\\"" "printf \\"18\\\\n\\" > \\"\\${@: -1}/PG_VERSION\\"" > /tmp/bin/initdb',
       'printf "%s\\n" "#!/usr/bin/env bash" "printf \\"pg_upgrade:%s\\\\n\\" \\"\\$*\\" >> /tmp/pg-upgrade.log" "exit 0" > /tmp/bin/pg_upgrade',
       'printf "%s\\n" "#!/usr/bin/env bash" "exit 0" > /tmp/bin/pg_ctl',
+      'printf "%s\\n" "#!/usr/bin/env bash" "exit 0" > /tmp/bin/vacuumdb',
       'printf "%s\\n" "#!/usr/bin/env bash" "if [[ \\"\\$1\\" == backup-list ]]; then date -u +\\"backup_name last_modified\\nbase_1 %Y-%m-%dT%H:%M:%SZ\\"; exit 0; fi" "if [[ \\"\\$1\\" == backup-push ]]; then exit 0; fi" "exit 1" > /tmp/bin/wal-g',
-      'chmod +x /tmp/bin/postgres /tmp/bin/initdb /tmp/bin/pg_upgrade /tmp/bin/pg_ctl /tmp/bin/wal-g',
+      'chmod +x /tmp/bin/postgres /tmp/bin/initdb /tmp/bin/pg_upgrade /tmp/bin/pg_ctl /tmp/bin/vacuumdb /tmp/bin/wal-g',
       'PATH=/tmp/bin:$PATH LOGGER_PATH=./scripts/lib/logger.sh WALG_LIB_PATH=./scripts/lib/walg.sh PG_OLD_MAJOR=17 PG_NEW_MAJOR=18 PGDATA=/tmp/pg/18/docker PG_BINARY_STASH_ROOT=/tmp/pg-binaries WALG_S3_PREFIX=s3://bucket/db WALG_ENV_FILE=/tmp/walg-env.sh bash ./scripts/upgrade.sh'
     ].join('; '));
 

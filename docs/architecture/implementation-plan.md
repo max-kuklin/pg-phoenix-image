@@ -4,7 +4,7 @@
 
 ## Current Status
 
-Phases 1 through 6 are implemented for the current scope: WAL-G setup, backup, startup restore, clone-from-prefix restore, restore idempotency, rollback markers, version mismatch detection, `PG_UPGRADE` dispatch, binary stash behavior, startup coverage, real `pg_upgrade --check` / `--link` execution, post-upgrade backup, and CI coverage are in place. Clone behavior is covered by the object-storage restore E2E instead of a separate duplicate file.
+Phases 1 through 6 are implemented for the current scope: WAL-G setup, backup, startup restore, clone-from-prefix restore, restore idempotency, rollback markers, version mismatch detection, `PG_UPGRADE` dispatch, binary stash behavior, startup coverage, real `pg_upgrade --check` / `--link` execution, post-upgrade backup, and CI coverage are in place. Clone behavior is covered by the object-storage restore E2E instead of a separate duplicate file. Upgrade rollback cleanup is covered at the Bash contract layer because it depends on controlled failure injection around `pg_upgrade` and temporary `pg_ctl` handoff rather than a distinct container topology.
 
 ## Phase 1: Foundation
 

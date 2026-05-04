@@ -135,6 +135,8 @@ Clone behavior currently lives in `backup-restore.test.js` because it uses the s
 | Restart after clone does not overwrite PGDATA | Depends on prior clone |
 | Bad source prefix fails clearly | Fresh container |
 
+The clone bad-source case runs as a direct failing `docker run` inside the shared object-storage network. That keeps the assertion focused on the startup contract: WAL-G failure is visible in logs and an empty target PGDATA is not promoted into a partial cluster.
+
 ### `upgrade.test.js`: Two PostgreSQL Majors + Object Storage
 
 This is the slowest suite because it builds old/new image variants via the Dockerfile `PG_BASE` build arg. Defaults are controlled by `PG_TEST_OLD` and `PG_TEST_NEW`.
@@ -143,10 +145,12 @@ The full upgrade suite is a pre-merge/release gate, not the normal edit loop. CI
 
 | Group | Scenarios | State |
 |---|---|---|
-| Upgrade gate | Mismatch without gate, no backup, full upgrade | Sequential |
-| Rollback | `pg_upgrade` failure and post-upgrade start failure | Sequential |
-| Post-upgrade | Data intact, prefix switched, analyze ran, no repeat upgrade | Read-only checks |
-| Binary stash | Created, reused on restart, updated on minor image change | Mixed |
+| Upgrade gate | Mismatch without gate, missing old stash, pre-upgrade backup gate, full upgrade | Startup tests plus upgrade E2E |
+| Rollback | `pg_upgrade --link` failure removes `$PGDATA.new`; post-upgrade temporary start failure swaps `$PGDATA.old` back | Contract tests with fake PG binaries |
+| Post-upgrade | Data intact, prefix switched, analyze ran, no repeat upgrade with `PG_UPGRADE=true` still set | Read-only checks plus restart |
+| Binary stash | Created, reused on restart, updated on same-major binary change | Mixed |
+
+The full upgrade E2E keeps to the real 17-to-18 happy path because it is already the slowest suite. Rollback is covered in `tests/contracts/upgrade-script.test.js` with fake old/new binaries so the script can fail deterministically at the two important boundaries: before the PGDATA swap and after the swap.
 
 ## Test Helpers
 

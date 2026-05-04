@@ -1,7 +1,9 @@
+import { execFile } from 'node:child_process';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { chmod, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import { GenericContainer, Wait } from 'testcontainers';
 import {
@@ -13,6 +15,8 @@ import {
   startPg,
   startPgWithObjectStorage
 } from './helpers/containers.js';
+
+const execFileAsync = promisify(execFile);
 
 async function containerLogs(container) {
   const stream = await container.logs({ tail: 200 });
@@ -289,4 +293,63 @@ describe('startup restore with S3-compatible object storage', () => {
       await rm(pitrDataDir, { recursive: true, force: true });
     }
   });
+
+  test('fails clearly when clone source prefix has no backup', async () => {
+    const badSourceDataDir = await mkdtemp(path.join(tmpdir(), 'pg-phoenix-bad-source-'));
+
+    await chmod(badSourceDataDir, 0o777);
+
+    try {
+      const env = {
+        ...objectStoragePgEnv('s3://pg-phoenix-test/restore-bad-source-target'),
+        PG_RESTORE_FROM: 's3://pg-phoenix-test/restore-missing-source/18',
+        PG_RESTORE_REQUEST_ID: 'restore-e2e-bad-source'
+      };
+      const args = [
+        'run',
+        '--rm',
+        '--network',
+        topology.network.getName(),
+        '--volume',
+        `${badSourceDataDir}:/var/lib/postgresql:rw`
+      ];
+
+      for (const [name, value] of Object.entries(env)) {
+        args.push('--env', `${name}=${value}`);
+      }
+
+      args.push(IMAGE_NAME, 'postgres');
+
+      let restore;
+      try {
+        restore = await execFileAsync('docker', args, { maxBuffer: 1024 * 1024 });
+      } catch (error) {
+        restore = {
+          stdout: error.stdout ?? '',
+          stderr: error.stderr ?? '',
+          code: error.code ?? 1
+        };
+      }
+
+      const pgVersion = await execFileAsync('docker', [
+        'run',
+        '--rm',
+        '--volume',
+        `${badSourceDataDir}:/var/lib/postgresql:rw`,
+        '--entrypoint',
+        'bash',
+        IMAGE_NAME,
+        '-lc',
+        'test ! -e /var/lib/postgresql/18/docker/PG_VERSION'
+      ]);
+
+      expect(restore.code).not.toBe(0);
+      expect(`${restore.stdout}${restore.stderr}`).toContain('[restore] ------ fetching backup ------');
+      expect(`${restore.stdout}${restore.stderr}`).toMatch(/backup.*not found|No backups found|not exist|NoSuchKey/i);
+      expect(pgVersion.stderr).toBe('');
+    } finally {
+      await makeMountedPgDataRemovable(badSourceDataDir);
+      await rm(badSourceDataDir, { recursive: true, force: true });
+    }
+  }, 90_000);
 });

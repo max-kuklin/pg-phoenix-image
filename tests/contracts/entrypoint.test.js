@@ -109,6 +109,21 @@ describe('entrypoint contracts', () => {
     expect(result.code).toBe(0);
   });
 
+  test('refreshes binary stash when same-major binaries change', async () => {
+    const result = await bash.run([
+      ...mockRuntime,
+      'bash ./scripts/entrypoint.sh postgres >/tmp/entrypoint-1.out',
+      'cp /tmp/pg-binaries/18/checksum /tmp/checksum-before',
+      'printf "%s\\n" "# patched binary content" >> /tmp/bin/pg_dump',
+      'bash ./scripts/entrypoint.sh postgres >/tmp/entrypoint-2.out',
+      'test -s /tmp/pg-binaries/18/checksum',
+      '! cmp -s /tmp/checksum-before /tmp/pg-binaries/18/checksum',
+      'grep -q "patched binary content" /tmp/pg-binaries/18/bin/pg_dump'
+    ].join('; '));
+
+    expect(result.code).toBe(0);
+  });
+
   test('WAL-G prefix requires backup schedule', async () => {
     const result = await bash.run([
       ...mockRuntime,
