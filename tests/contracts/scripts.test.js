@@ -35,11 +35,48 @@ describe('script stubs contract', () => {
     expect(result.stderr).toMatch(/ ERROR \[restore\] usage: restore\.sh/);
   });
 
-  test('upgrade stub fails closed until implemented', async () => {
+  test('upgrade preflight requires entrypoint-provided environment', async () => {
     const result = await bash.run('LOGGER_PATH=./scripts/lib/logger.sh bash ./scripts/upgrade.sh');
 
     expect(result.code).toBe(1);
     expect(result.stdout).toBe('');
-    expect(result.stderr).toMatch(/ ERROR \[upgrade\] upgrade script is not implemented yet\n$/);
+    expect(result.stderr).toMatch(/ ERROR \[upgrade\] PG_OLD_MAJOR is required\n$/);
+  });
+
+  test('upgrade preflight refuses invalid backup max age', async () => {
+    const result = await bash.run([
+      'mkdir -p /tmp/pg/18/docker',
+      'printf "18\\n" > /tmp/pg/18/docker/PG_VERSION',
+      'LOGGER_PATH=./scripts/lib/logger.sh PG_OLD_MAJOR=17 PG_NEW_MAJOR=18 PGDATA=/tmp/pg/18/docker PG_UPGRADE_BACKUP_MAX_AGE=soon bash ./scripts/upgrade.sh'
+    ].join('; '));
+
+    expect(result.code).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toMatch(/ ERROR \[upgrade\] PG_UPGRADE_BACKUP_MAX_AGE must be a non-negative integer\n$/);
+  });
+
+  test('upgrade preflight requires old PostgreSQL binary stash', async () => {
+    const result = await bash.run([
+      'mkdir -p /tmp/pg/18/docker',
+      'printf "18\\n" > /tmp/pg/18/docker/PG_VERSION',
+      'LOGGER_PATH=./scripts/lib/logger.sh PG_OLD_MAJOR=17 PG_NEW_MAJOR=18 PGDATA=/tmp/pg/18/docker PG_BINARY_STASH_ROOT=/tmp/pg-binaries bash ./scripts/upgrade.sh'
+    ].join('; '));
+
+    expect(result.code).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('[upgrade] no stashed PostgreSQL binaries for version 17 at /tmp/pg-binaries/17/bin');
+  });
+
+  test('upgrade preflight reaches execution stop when gates pass', async () => {
+    const result = await bash.run([
+      'mkdir -p /tmp/pg/18/docker /tmp/pg-binaries/17/bin',
+      'printf "18\\n" > /tmp/pg/18/docker/PG_VERSION',
+      'for binary in postgres pg_upgrade pg_ctl pg_resetwal pg_dump pg_dumpall; do printf "%s\\n" "#!/usr/bin/env bash" "exit 0" > "/tmp/pg-binaries/17/bin/$binary"; chmod +x "/tmp/pg-binaries/17/bin/$binary"; done',
+      'LOGGER_PATH=./scripts/lib/logger.sh PG_OLD_MAJOR=17 PG_NEW_MAJOR=18 PGDATA=/tmp/pg/18/docker PG_BINARY_STASH_ROOT=/tmp/pg-binaries bash ./scripts/upgrade.sh'
+    ].join('; '));
+
+    expect(result.code).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toMatch(/ ERROR \[upgrade\] upgrade execution is not implemented yet\n$/);
   });
 });

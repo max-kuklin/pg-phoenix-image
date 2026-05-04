@@ -81,7 +81,7 @@ export async function startObjectStorage() {
 
   try {
     objectStorage = await new GenericContainer(OBJECT_STORAGE_IMAGE)
-      .withCommand(['server', '-s3'])
+      .withCommand(['server', '-s3', '-ip.bind=0.0.0.0'])
       .withEnvironment({
         AWS_ACCESS_KEY_ID: OBJECT_STORAGE_ACCESS_KEY,
         AWS_SECRET_ACCESS_KEY: OBJECT_STORAGE_SECRET_KEY
@@ -92,20 +92,11 @@ export async function startObjectStorage() {
       .withWaitStrategy(Wait.forListeningPorts())
       .start();
 
-    const objectStorageClient = await new GenericContainer(OBJECT_STORAGE_CLIENT_IMAGE)
-      .withNetwork(network)
-      .withEntrypoint(['aws'])
-      .withEnvironment(objectStorageClientEnv())
-      .withCommand([
-        '--endpoint-url',
-        OBJECT_STORAGE_ENDPOINT,
-        's3',
-        'mb',
-        `s3://${OBJECT_STORAGE_BUCKET}`
-      ])
-      .withWaitStrategy(Wait.forOneShotStartup())
-      .start();
-    await objectStorageClient.stop();
+    await runObjectStorageAws(network, [
+      's3',
+      'mb',
+      `s3://${OBJECT_STORAGE_BUCKET}`
+    ]);
 
     return {
       objectStorage,
@@ -143,44 +134,57 @@ function objectStorageClientEnv() {
   return {
     AWS_ACCESS_KEY_ID: OBJECT_STORAGE_ACCESS_KEY,
     AWS_SECRET_ACCESS_KEY: OBJECT_STORAGE_SECRET_KEY,
-    AWS_DEFAULT_REGION: 'us-east-1'
+    AWS_DEFAULT_REGION: 'us-east-1',
+    AWS_S3_ADDRESSING_STYLE: 'path'
   };
 }
 
-export async function listObjectStorageObjects(network, prefix) {
-  const container = await new GenericContainer(OBJECT_STORAGE_CLIENT_IMAGE)
-    .withNetwork(network)
-    .withEntrypoint(['aws'])
-    .withEnvironment(objectStorageClientEnv())
-    .withCommand([
-      '--endpoint-url',
-      OBJECT_STORAGE_ENDPOINT,
-      's3',
-      'ls',
-      `s3://${OBJECT_STORAGE_BUCKET}/${prefix}`,
-      '--recursive'
-    ])
-    .withWaitStrategy(Wait.forOneShotStartup())
-    .start();
+async function runObjectStorageAws(network, args) {
+  let lastError;
 
-  try {
-    const logs = await container.logs();
-    const chunks = [];
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    let container;
 
-    for await (const chunk of logs) {
-      chunks.push(Buffer.from(chunk).toString('utf8'));
+    try {
+      container = await new GenericContainer(OBJECT_STORAGE_CLIENT_IMAGE)
+        .withNetwork(network)
+        .withEntrypoint(['sh'])
+        .withEnvironment(objectStorageClientEnv())
+        .withCommand(['-c', 'sleep 300'])
+        .start();
+
+      const result = await container.exec(['aws', '--endpoint-url', OBJECT_STORAGE_ENDPOINT, ...args]);
+
+      if (result.exitCode === 0) {
+        return `${result.stdout}${result.stderr}`;
+      }
+
+      throw new Error(`aws ${args.join(' ')} failed with exit ${result.exitCode}\n${result.stdout}${result.stderr}`);
+    } catch (error) {
+      lastError = error;
+      await delay(500);
+    } finally {
+      await container?.stop().catch(() => {});
     }
-
-    return chunks
-      .join('')
-      .split('\n')
-      .map((line) => line.trim().split(/\s+/).at(-1))
-      .filter(Boolean)
-      .map((key) => `s3://${OBJECT_STORAGE_BUCKET}/${key}`)
-      .join('\n');
-  } finally {
-    await container.stop();
   }
+
+  throw lastError;
+}
+
+export async function listObjectStorageObjects(network, prefix) {
+  const logs = await runObjectStorageAws(network, [
+    's3',
+    'ls',
+    `s3://${OBJECT_STORAGE_BUCKET}/${prefix}`,
+    '--recursive'
+  ]);
+
+  return logs
+    .split('\n')
+    .map((line) => line.trim().split(/\s+/).at(-1))
+    .filter(Boolean)
+    .map((key) => `s3://${OBJECT_STORAGE_BUCKET}/${key}`)
+    .join('\n');
 }
 
 export function objectStoragePgEnv(prefix = `s3://${OBJECT_STORAGE_BUCKET}/pg`) {

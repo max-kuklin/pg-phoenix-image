@@ -2,10 +2,8 @@
 # -----------------------------------------------
 # postgres:18 (Debian) + precompiled WAL-G + scripts + config
 
-# Pin base image digest for reproducible builds — Renovate Bot updates this.
-# Get digest: docker pull postgres:18 && docker inspect --format='{{index .RepoDigests 0}}' postgres:18
-# TODO: pin to postgres:18@sha256:<digest> once Renovate is configured (see docs/architecture/upgrade-minor.md)
-ARG PG_BASE=postgres:18
+# Pin base image digest for reproducible builds. Renovate updates this.
+ARG PG_BASE=postgres:18@sha256:78481659c47e862334611ccdaf7c369c986b3046da9857112f3b309114a65fb4
 FROM ${PG_BASE}
 
 ARG WALG_VERSION=v3.0.8

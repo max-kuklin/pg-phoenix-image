@@ -23,7 +23,7 @@ Born after 5+ years of running PostgreSQL on Kubernetes+Istio with Patroni/Spilo
 ```text
 pg-phoenix-image/
 |-- Dockerfile
-|-- scripts/           # entrypoint, backup, restore, upgrade stub, shared Bash libs
+|-- scripts/           # entrypoint, backup, restore, upgrade preflight, shared Bash libs
 |-- config/            # postgresql.conf, pg_hba.conf
 |-- tests/             # contract and Testcontainers suites
 `-- docs/
@@ -48,8 +48,7 @@ See [docs/](docs/) for backup configuration, Kubernetes deployment, PITR procedu
 
 ## Planned Features
 
-- Major-version upgrade automation (`upgrade.sh` is currently a stub)
-- Renovate digest pinning for the PostgreSQL base image
+- Major-version upgrade automation (`upgrade.sh` currently implements only preflight checks)
 - Broader clone, PITR, retention, and failure-mode E2E coverage
 - Streaming replication / read replicas
 - Automatic failover / manual switchover

@@ -78,8 +78,7 @@ tests/
   pg-only.test.js
   startup.test.js
   backup-restore.test.js
-  clone.test.js
-  upgrade.test.js
+  contracts/
 ```
 
 ### `pg-only.test.js`: Image Smoke
@@ -125,9 +124,9 @@ One shared PG + SeaweedFS S3 pair. Backup tests create the state that restore te
 | Backup without creds | No WAL-G credentials configured, graceful skip | Fresh PG container |
 | Restore | startup latest restore, startup PITR, overwrite gate, failed fetch leaves PGDATA untouched, explicit rollback | Sequential |
 
-### `clone.test.js`: Source + Target + Object Storage
+### Clone Coverage
 
-Validates cross-instance clone behavior. `startup.test.js` checks that clone is triggered; this file checks data fidelity.
+Clone behavior currently lives in `backup-restore.test.js` because it uses the same source + target + object storage topology as startup restore. Keeping it there avoids another SeaweedFS startup for duplicate coverage.
 
 | Scenario | State |
 |---|---|
@@ -136,9 +135,9 @@ Validates cross-instance clone behavior. `startup.test.js` checks that clone is 
 | Restart after clone does not overwrite PGDATA | Depends on prior clone |
 | Bad source prefix fails clearly | Fresh container |
 
-### `upgrade.test.js`: Two PostgreSQL Majors + Object Storage
+### Future `upgrade.test.js`: Two PostgreSQL Majors + Object Storage
 
-Slowest suite. It builds old/new image variants via the Dockerfile `PG_BASE` build arg. Defaults are controlled by `PG_TEST_OLD` and `PG_TEST_NEW`.
+This suite should be added when the real `pg_upgrade` flow exists. It will be the slowest suite because it builds old/new image variants via the Dockerfile `PG_BASE` build arg. Defaults should be controlled by `PG_TEST_OLD` and `PG_TEST_NEW`.
 
 The full upgrade suite is a pre-merge/release gate, not the normal edit loop. CI should cache Docker layers for this suite because the Dockerfile installs packages and downloads WAL-G.
 

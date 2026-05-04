@@ -4,7 +4,7 @@
 
 ## Current Status
 
-Phases 1 through 4 are implemented for the current scope: WAL-G setup, backup, startup restore, clone-from-prefix restore, restore idempotency, rollback markers, version mismatch detection, `PG_UPGRADE` dispatch, binary stash behavior, and startup coverage are in place. Clone behavior is covered by the object-storage restore E2E instead of a separate duplicate file. Phase 5 is design-only; `upgrade.sh` is still a stub. Phase 6 has CI coverage for main and PR events plus Renovate digest pinning configuration.
+Phases 1 through 4 are implemented for the current scope: WAL-G setup, backup, startup restore, clone-from-prefix restore, restore idempotency, rollback markers, version mismatch detection, `PG_UPGRADE` dispatch, binary stash behavior, and startup coverage are in place. Clone behavior is covered by the object-storage restore E2E instead of a separate duplicate file. Phase 5 has started with upgrade preflight checks only; the real `pg_upgrade` flow is not implemented yet. Phase 6 has CI coverage for main and PR events plus Renovate digest pinning configuration.
 
 ## Phase 1: Foundation
 
@@ -65,8 +65,10 @@ Clone restore is validated in `tests/backup-restore.test.js` because it needs th
 
 | Step | Deliverable | Depends on | Test |
 |---|---|---|---|
-| 12 | `scripts/upgrade.sh` plus minimal contracts for gates/argument decisions | Phase 1 plus steps 6 and 9 | contract tests only where pure Bash value exists |
-| 13 | `tests/upgrade.test.js` | Phase 2 plus step 12 | write E2E tests for real upgrade behavior |
+| 12a | `scripts/upgrade.sh` preflight checks for env, old binary stash, and basic gates | Phase 1 plus steps 6 and 9 | contract tests only |
+| 12b | `scripts/upgrade.sh` backup gate and old-version temporary startup | step 12a | contract tests for decisions, container tests for process behavior |
+| 12c | `pg_upgrade --check`, `pg_upgrade --link`, rollback, post-upgrade backup, and stash cleanup | step 12b | E2E tests for real upgrade behavior |
+| 13 | `tests/upgrade.test.js` | Phase 2 plus step 12c | write E2E tests for real upgrade behavior |
 
 Upgrade is last because it has the heaviest setup: two PostgreSQL major versions, stashed binaries, `pg_upgrade --link`, pre-upgrade backup gating, and rollback paths.
 
@@ -91,7 +93,6 @@ test harness -> logger.sh -> script stubs -> image build -> pg-only.test.js
      +-> containers.js                              |
                                                      +-> backup.sh + restore.sh -> backup-restore.test.js
                                                      +-> entrypoint.sh ---------> startup.test.js
-                                                     |                             clone.test.js
                                                      +-> upgrade.sh ------------> upgrade.test.js
 ```
 
@@ -104,7 +105,7 @@ Container tests depend on a prebuilt `pg-phoenix-image:test` image. Contract tes
 | 1: Foundation | `logger.sh`, stub scripts | contract harness, logger contract, container helpers, image build gate | 10 files |
 | 2: Image | none | `pg-only.test.js` | 11 files |
 | 3: Backup/Restore | `backup.sh`, `restore.sh` | focused contracts, `backup-restore.test.js` | 14 files |
-| 4: Entrypoint | `entrypoint.sh` | focused contracts, `startup.test.js`, `clone.test.js` | 17 files |
+| 4: Entrypoint | `entrypoint.sh` | focused contracts, `startup.test.js`, clone coverage in `backup-restore.test.js` | 16 files |
 | 5: Upgrade | `upgrade.sh` | focused contracts, `upgrade.test.js` | 19 files |
 | 6: CI | none | CI workflow, `renovate.json` | 21 files |
 

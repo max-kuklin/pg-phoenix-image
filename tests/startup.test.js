@@ -172,7 +172,7 @@ describe('startup behavior', () => {
     });
   });
 
-  test('PGDATA version mismatch with upgrade gate fails closed while upgrade is unimplemented', async () => {
+  test('PGDATA version mismatch with upgrade gate fails closed without old binary stash', async () => {
     await withPgData(async ({ pgDataParent }) => {
       await setupPgData(
         pgDataParent,
@@ -190,7 +190,7 @@ describe('startup behavior', () => {
       );
 
       expect(result.code).toBe(1);
-      expect(result.stderr).toContain('[upgrade] upgrade script is not implemented yet');
+      expect(result.stderr).toContain('[upgrade] no stashed PostgreSQL binaries for version 17');
     });
   });
 
