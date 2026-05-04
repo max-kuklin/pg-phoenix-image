@@ -1,9 +1,19 @@
-import { describe, expect, test } from 'vitest';
-import { runBash } from '../helpers/shell.js';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { createBashRunner } from '../helpers/shell.js';
 
 describe('restore argument contracts', () => {
+  let bash;
+
+  beforeAll(async () => {
+    bash = await createBashRunner();
+  });
+
+  afterAll(async () => {
+    await bash?.stop();
+  });
+
   test('parses bootstrap restore with source and target time', async () => {
-    const result = await runBash(
+    const result = await bash.run(
       [
         '. ./scripts/lib/walg.sh',
         '. ./scripts/lib/restore-args.sh',
@@ -17,7 +27,7 @@ describe('restore argument contracts', () => {
   });
 
   test('rejects --from values without a version segment', async () => {
-    const result = await runBash(
+    const result = await bash.run(
       '. ./scripts/lib/walg.sh; . ./scripts/lib/restore-args.sh; restore_parse_args --from s3://bucket/source18'
     );
 
@@ -25,11 +35,10 @@ describe('restore argument contracts', () => {
   });
 
   test('rejects unknown arguments', async () => {
-    const result = await runBash(
+    const result = await bash.run(
       '. ./scripts/lib/walg.sh; . ./scripts/lib/restore-args.sh; restore_parse_args --bad'
     );
 
     expect(result.code).toBe(2);
   });
 });
-

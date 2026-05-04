@@ -2,6 +2,10 @@
 
 > Note: The Dockerfile is committed in its final state. It references scripts from all phases. Phase 1 creates the test harness, logger, and minimal scripts so the image can build and container-first TDD can start immediately. Later phases replace stubs with real implementations.
 
+## Current Status
+
+Phases 1 and 2 are implemented. Phase 3 is partially implemented: WAL-G setup, `backup.sh`, startup restore preparation, restore idempotency, rollback markers, and the first MinIO E2E restore path are in place. Phase 4 has partial entrypoint behavior through restore selection, but the dedicated `startup.test.js` and `clone.test.js` suites have not been added yet. Phase 5 is design-only; `upgrade.sh` is still a stub. Phase 6 has a main-branch CI workflow, but Renovate digest pinning is not configured.
+
 ## Phase 1: Foundation
 
 | Step | Deliverable | Depends on | Test |

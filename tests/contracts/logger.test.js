@@ -1,9 +1,19 @@
-import { describe, expect, test } from 'vitest';
-import { runBash } from '../helpers/shell.js';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { createBashRunner } from '../helpers/shell.js';
 
 describe('logger contract', () => {
+  let bash;
+
+  beforeAll(async () => {
+    bash = await createBashRunner();
+  });
+
+  afterAll(async () => {
+    await bash?.stop();
+  });
+
   test('writes INFO logs to stderr with UTC timestamp and component', async () => {
-    const result = await runBash(
+    const result = await bash.run(
       "LOG_COMPONENT=contract; . ./scripts/lib/logger.sh; log_info 'hello world'"
     );
 
@@ -13,7 +23,7 @@ describe('logger contract', () => {
   });
 
   test('filters DEBUG logs at the default INFO level', async () => {
-    const result = await runBash(
+    const result = await bash.run(
       "LOG_COMPONENT=contract; . ./scripts/lib/logger.sh; log_debug 'hidden'"
     );
 
@@ -23,7 +33,7 @@ describe('logger contract', () => {
   });
 
   test('prints DEBUG logs when LOG_LEVEL=DEBUG', async () => {
-    const result = await runBash(
+    const result = await bash.run(
       "LOG_COMPONENT=contract; . ./scripts/lib/logger.sh; log_debug 'visible'",
       { env: { LOG_LEVEL: 'DEBUG' } }
     );
@@ -33,7 +43,7 @@ describe('logger contract', () => {
   });
 
   test('log_fatal writes ERROR and exits with code 1', async () => {
-    const result = await runBash(
+    const result = await bash.run(
       "LOG_COMPONENT=contract; . ./scripts/lib/logger.sh; log_fatal 'stop now'"
     );
 
@@ -42,4 +52,3 @@ describe('logger contract', () => {
     expect(result.stderr).toMatch(/ ERROR \[contract\] stop now\n$/);
   });
 });
-

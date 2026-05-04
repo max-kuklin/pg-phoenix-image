@@ -4,36 +4,31 @@
   <img src="assets/logo.png" alt="pg-phoenix-image logo" width="300">
 </p>
 
-Custom PostgreSQL Docker image based on postgres:18 (Debian), built to rise again — automatically and quickly recover on Kubernetes with spot-instance nodes. Ships with simple operational scripts for automated WAL-G backups, point-in-time recovery, and safe major-version upgrades. Fully e2e tested.
+Custom PostgreSQL Docker image based on postgres:18 (Debian), built to rise again by keeping WAL-G backup and startup restore operations close to the database runtime.
 
 Born after 5+ years of running PostgreSQL on Kubernetes+Istio with Patroni/Spilo and a desire for simpler, more reliable operations.
 
 > [!CAUTION]
 > This is a work in progress. Not in usable state yet.
 
-## Features
+## Implemented Features
 
-- **Automatic Backups** — continuous WAL archiving + scheduled base backups via WAL-G
-- **Restore & Clone** — PITR to any timestamp, disaster recovery, clone from another instance's backups
-- **Safe Major-Version Upgrades** — in-place `pg_upgrade --link` with automatic rollback on failure
-- **Minor Version Tracking** — CI rebuilds on base image changes, fully tested before push
-- **Prometheus Metrics** — `pg_stat_statements` + postgres_exporter sidecar support
-- **Slow Query Log** — log queries exceeding a configurable duration threshold
-- **Spot Instance Optimized** — fast shutdown, instant startup, no cold downloads (deployment-level, see `docs/deployment.md`)
-- **Complete Test Suite** — e2e integration tests for every feature above (Node.js + Testcontainers)
+- **PostgreSQL 18 image baseline** - shipped config, `pg_stat_statements`, WAL-G, cron, and `conf.d` override support.
+- **Automatic backups** - WAL archiving plus scheduled base backups through WAL-G when a storage prefix is configured.
+- **Startup restore and clone foundation** - restore latest backup or a PITR target during container startup, including request-id idempotency and local rollback staging.
+- **Container-first tests** - Bash contract tests plus Testcontainers coverage for image startup, WAL-G backup, and startup restore against MinIO.
 
 ## Project Structure
 
-```
+```text
 pg-phoenix-image/
-├── Dockerfile
-├── renovate.json      # base image digest tracking
-├── scripts/           # entrypoint, backup, restore, bootstrap, upgrade, healthcheck
-├── config/            # postgresql.conf, pg_hba.conf
-├── tests/             # e2e tests (Node.js + Testcontainers)
-└── docs/
-    ├── architecture/  # feature design docs (backup, restore, upgrades, metrics, etc.)
-    └── *.md           # operational guides (deployment, backup-setup, restore, upgrade, monitoring)
+|-- Dockerfile
+|-- scripts/           # entrypoint, backup, restore, upgrade stub, shared Bash libs
+|-- config/            # postgresql.conf, pg_hba.conf
+|-- tests/             # contract and Testcontainers suites
+`-- docs/
+    |-- architecture/  # design docs and implementation plan
+    `-- *.md           # operational guides
 ```
 
 ## Quick Start
@@ -42,19 +37,22 @@ pg-phoenix-image/
 # Build
 docker build -t pg-phoenix-image:18-latest .
 
-# Run (no backups)
+# Run without backups
 docker run -d -e POSTGRES_PASSWORD=changeme -p 5432:5432 pg-phoenix-image:18-latest
 
 # Run tests
-npm test                   # e2e (PG + MinIO via Testcontainers)
+npm test
 ```
 
-See [docs/](docs/) for backup configuration, Kubernetes deployment, PITR procedures, and upgrade runbooks.
+See [docs/](docs/) for backup configuration, Kubernetes deployment, PITR procedures, and upgrade design notes.
 
-## Planned Features (not yet implemented) 
+## Planned Features
 
-- Streaming replication / Read replicas
-- Automatic failover / Manual switchover
+- Major-version upgrade automation (`upgrade.sh` is currently a stub)
+- Renovate digest pinning for the PostgreSQL base image
+- Broader startup, clone, PITR, retention, and failure-mode E2E coverage
+- Streaming replication / read replicas
+- Automatic failover / manual switchover
 - PgDog connection pooling
 
 ## License

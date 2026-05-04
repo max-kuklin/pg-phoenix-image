@@ -26,7 +26,7 @@ async function waitForQuery(pgContainer, sql, timeoutMs = 60_000) {
       return await pgContainer.query(sql);
     } catch (error) {
       lastError = error;
-      await delay(1000);
+      await delay(250);
     }
   }
 
@@ -49,12 +49,15 @@ describe('backup with MinIO', () => {
     const archiveCommand = await topology.pg.query('SHOW archive_command');
     const archiveTimeout = await topology.pg.query('SHOW archive_timeout');
     const envFile = await topology.pg.exec(['bash', '-lc', 'test -f /etc/walg-env.sh && stat -c "%a" /etc/walg-env.sh']);
+    const envContent = await topology.pg.exec(['bash', '-lc', '. /etc/walg-env.sh && printf "%s" "$WALG_S3_PREFIX"']);
     const cronFile = await topology.pg.exec(['bash', '-lc', 'cat /etc/cron.d/pg-backup']);
 
     expect(archiveCommand.rows[0].archive_command).toBe('. /etc/walg-env.sh && wal-g wal-push %p');
     expect(archiveTimeout.rows[0].archive_timeout).toBe('1min');
     expect(envFile.exitCode).toBe(0);
     expect(envFile.stdout.trim()).toBe('600');
+    expect(envContent.exitCode).toBe(0);
+    expect(envContent.stdout).toBe('s3://pg-phoenix-test/pg/18');
     expect(cronFile.exitCode).toBe(0);
     expect(cronFile.stdout).toContain('0 0 * * * postgres /usr/local/bin/backup.sh');
   });
@@ -70,6 +73,26 @@ describe('backup with MinIO', () => {
     expect(backup.stderr).toContain('[backup] base backup completed');
     expect(list.exitCode).toBe(0);
     expect(list.stdout).toContain('base_');
+  });
+});
+
+describe('backup without WAL-G configuration', () => {
+  let pg;
+
+  beforeAll(async () => {
+    pg = await startPg();
+  });
+
+  afterAll(async () => {
+    await pg?.stop();
+  });
+
+  test('backup.sh skips cleanly when no WAL-G env file exists', async () => {
+    const backup = await pg.exec(['backup.sh'], { user: 'postgres' });
+
+    expect(backup.exitCode).toBe(0);
+    expect(backup.stdout).toBe('');
+    expect(backup.stderr).toContain('[backup] WAL-G env file not found; skipping backup');
   });
 });
 

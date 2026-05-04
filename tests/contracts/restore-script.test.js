@@ -1,5 +1,5 @@
-import { describe, expect, test } from 'vitest';
-import { runBash } from '../helpers/shell.js';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { createBashRunner } from '../helpers/shell.js';
 
 const scriptEnv = [
   'export LOGGER_PATH=/workspace/scripts/lib/logger.sh',
@@ -15,8 +15,18 @@ const scriptEnv = [
 ];
 
 describe('restore script contracts', () => {
+  let bash;
+
+  beforeAll(async () => {
+    bash = await createBashRunner();
+  });
+
+  afterAll(async () => {
+    await bash?.stop();
+  });
+
   test('refuses to restore over existing PGDATA without overwrite gate', async () => {
-    const result = await runBash(
+    const result = await bash.run(
       [
         ...scriptEnv,
         'mkdir -p "$PGDATA"',
@@ -30,7 +40,7 @@ describe('restore script contracts', () => {
   });
 
   test('requires request id for explicit restore', async () => {
-    const result = await runBash(
+    const result = await bash.run(
       [
         ...scriptEnv,
         'bash /workspace/scripts/restore.sh'
@@ -42,7 +52,7 @@ describe('restore script contracts', () => {
   });
 
   test('stages restore before moving existing PGDATA aside', async () => {
-    const result = await runBash(
+    const result = await bash.run(
       [
         ...scriptEnv,
         'mkdir -p "$PGDATA"',
@@ -61,7 +71,7 @@ describe('restore script contracts', () => {
   });
 
   test('writes source prefix into restore command for cross-instance restore', async () => {
-    const result = await runBash(
+    const result = await bash.run(
       [
         ...scriptEnv,
         'RESTORE_REQUEST_ID=cross-instance bash /workspace/scripts/restore.sh --from s3://bucket/source/18',
@@ -74,7 +84,7 @@ describe('restore script contracts', () => {
   });
 
   test('skips completed restore request id', async () => {
-    const result = await runBash(
+    const result = await bash.run(
       [
         ...scriptEnv,
         'mkdir -p "$PGDATA" /tmp/pg/18/restore-state',
@@ -89,7 +99,7 @@ describe('restore script contracts', () => {
   });
 
   test('rollback restores pre-restore data and keeps failed restore for inspection', async () => {
-    const result = await runBash(
+    const result = await bash.run(
       [
         ...scriptEnv,
         'mkdir -p "$PGDATA" /tmp/pg/18/pre-restore',
@@ -107,7 +117,7 @@ describe('restore script contracts', () => {
   });
 
   test('skips completed rollback request id', async () => {
-    const result = await runBash(
+    const result = await bash.run(
       [
         ...scriptEnv,
         'mkdir -p "$PGDATA" /tmp/pg/18/restore-state',
