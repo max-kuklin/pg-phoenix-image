@@ -35,11 +35,11 @@ describe('script stubs contract', () => {
     expect(result.stderr).toMatch(/ ERROR \[restore\] usage: restore\.sh/);
   });
 
-  test('upgrade stub sources logger and exits cleanly', async () => {
+  test('upgrade stub fails closed until implemented', async () => {
     const result = await bash.run('LOGGER_PATH=./scripts/lib/logger.sh bash ./scripts/upgrade.sh');
 
-    expect(result.code).toBe(0);
+    expect(result.code).toBe(1);
     expect(result.stdout).toBe('');
-    expect(result.stderr).toMatch(/ INFO  \[upgrade\] upgrade script is not implemented yet\n$/);
+    expect(result.stderr).toMatch(/ ERROR \[upgrade\] upgrade script is not implemented yet\n$/);
   });
 });

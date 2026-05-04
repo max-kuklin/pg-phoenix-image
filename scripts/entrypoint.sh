@@ -6,6 +6,9 @@ LOG_COMPONENT=entrypoint
 . "${WALG_LIB_PATH:-/usr/local/lib/walg.sh}"
 
 PG_MAJOR="$(postgres -V | awk '{print $3}' | cut -d. -f1)"
+PGDATA="${PGDATA:-/var/lib/postgresql/$PG_MAJOR/docker}"
+PG_BINARY_STASH_ROOT="${PG_BINARY_STASH_ROOT:-/var/lib/postgresql/.pg-binaries}"
+PG_STASH_BINARIES=(postgres pg_upgrade pg_ctl pg_resetwal pg_dump pg_dumpall)
 
 validate_non_negative_int() {
   [[ "$1" =~ ^[0-9]+$ ]]
@@ -100,7 +103,79 @@ EOF
 }
 
 pgdata_exists() {
-  [[ -e "${PGDATA:-/var/lib/postgresql/$PG_MAJOR/docker}/PG_VERSION" ]]
+  [[ -e "$PGDATA/PG_VERSION" ]]
+}
+
+pgdata_major() {
+  local version
+
+  version="$(< "$PGDATA/PG_VERSION")"
+  printf '%s\n' "${version%%.*}"
+}
+
+binary_path() {
+  command -v "$1"
+}
+
+stash_checksum() {
+  local binary
+
+  for binary in "${PG_STASH_BINARIES[@]}"; do
+    binary_path "$binary"
+  done | sort | xargs sha256sum
+}
+
+stash_pg_binaries() {
+  local target="$PG_BINARY_STASH_ROOT/$PG_MAJOR"
+  local target_bin="$target/bin"
+  local temp="$target.tmp.$$"
+  local checksum
+  local binary
+
+  checksum="$(stash_checksum)"
+
+  if [[ -f "$target/checksum" && "$(< "$target/checksum")" == "$checksum" ]]; then
+    log_debug "PostgreSQL $PG_MAJOR binary stash is current"
+    return 0
+  fi
+
+  rm -rf "$temp"
+  mkdir -p "$temp/bin"
+
+  for binary in "${PG_STASH_BINARIES[@]}"; do
+    cp "$(binary_path "$binary")" "$temp/bin/$binary"
+  done
+
+  printf '%s' "$checksum" > "$temp/checksum"
+  chown -R postgres:postgres "$temp"
+  rm -rf "$target"
+  mv "$temp" "$target"
+  log_info "stashed PostgreSQL $PG_MAJOR binaries at $target_bin"
+}
+
+check_pgdata_version() {
+  local data_major
+
+  if ! pgdata_exists; then
+    return 0
+  fi
+
+  data_major="$(pgdata_major)"
+
+  if [[ "$data_major" == "$PG_MAJOR" ]]; then
+    return 0
+  fi
+
+  if [[ "${PG_UPGRADE:-}" == "true" ]]; then
+    PG_OLD_MAJOR="$data_major" PG_NEW_MAJOR="$PG_MAJOR" PGDATA="$PGDATA" "${UPGRADE_SCRIPT_PATH:-upgrade.sh}"
+    data_major="$(pgdata_major)"
+    if [[ "$data_major" != "$PG_MAJOR" ]]; then
+      log_fatal "upgrade script completed but PGDATA is still version $data_major; expected PostgreSQL $PG_MAJOR"
+    fi
+    return 0
+  fi
+
+  log_fatal "PGDATA is version $data_major but this image runs PostgreSQL $PG_MAJOR. Set PG_UPGRADE=true to perform an in-place major upgrade."
 }
 
 run_restore_if_requested() {
@@ -130,6 +205,8 @@ if [[ "${1:-}" == -* ]]; then
 fi
 
 if [[ "${1:-}" == "postgres" ]]; then
+  check_pgdata_version
+  stash_pg_binaries
   setup_walg_env
   run_restore_if_requested
   setup_backup

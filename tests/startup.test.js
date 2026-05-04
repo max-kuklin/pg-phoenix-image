@@ -132,6 +132,68 @@ describe('startup behavior', () => {
     expect(result.stderr).toContain('[restore] PG_RESTORE_REQUEST_ID is required for restore and rollback requests');
   });
 
+  test('stashes PostgreSQL binaries before handoff', async () => {
+    await withPgData(async ({ pgDataParent }) => {
+      const result = await runImage(
+        {},
+        {
+          command: ['postgres', '--help'],
+          bindMounts: [{ source: pgDataParent, target: '/var/lib/postgresql', mode: 'rw' }]
+        }
+      );
+
+      expect(result.code, result.stderr).toBe(0);
+
+      const checksum = await readPgDataFile(pgDataParent, '.pg-binaries/18/checksum');
+
+      expect(checksum).toContain('/usr/lib/postgresql/18/bin/postgres');
+      expect(checksum).toContain('/usr/lib/postgresql/18/bin/pg_upgrade');
+    });
+  });
+
+  test('refuses PGDATA version mismatch without upgrade gate', async () => {
+    await withPgData(async ({ pgDataParent }) => {
+      await setupPgData(
+        pgDataParent,
+        'mkdir -p /var/lib/postgresql/18/docker && printf "17\\n" > /var/lib/postgresql/18/docker/PG_VERSION && chmod -R 0777 /var/lib/postgresql'
+      );
+
+      const result = await runImage(
+        {},
+        {
+          command: ['postgres', '--help'],
+          bindMounts: [{ source: pgDataParent, target: '/var/lib/postgresql', mode: 'rw' }]
+        }
+      );
+
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain('[entrypoint] PGDATA is version 17 but this image runs PostgreSQL 18');
+      expect(result.stderr).toContain('Set PG_UPGRADE=true to perform an in-place major upgrade');
+    });
+  });
+
+  test('PGDATA version mismatch with upgrade gate fails closed while upgrade is unimplemented', async () => {
+    await withPgData(async ({ pgDataParent }) => {
+      await setupPgData(
+        pgDataParent,
+        'mkdir -p /var/lib/postgresql/18/docker && printf "17\\n" > /var/lib/postgresql/18/docker/PG_VERSION && chmod -R 0777 /var/lib/postgresql'
+      );
+
+      const result = await runImage(
+        {
+          PG_UPGRADE: 'true'
+        },
+        {
+          command: ['postgres', '--help'],
+          bindMounts: [{ source: pgDataParent, target: '/var/lib/postgresql', mode: 'rw' }]
+        }
+      );
+
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain('[upgrade] upgrade script is not implemented yet');
+    });
+  });
+
   test('refuses restore over existing PGDATA without overwrite gate', async () => {
     await withPgData(async ({ pgDataParent }) => {
       await setupPgData(

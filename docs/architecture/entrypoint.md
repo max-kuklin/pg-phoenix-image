@@ -4,6 +4,8 @@
 
 Single startup script that ties all image features together. Runs before `docker-entrypoint.sh` and decides what needs to happen based on the current state of PGDATA and environment variables.
 
+Any feature that needs to start PostgreSQL before handoff must use a temporary `pg_ctl`-managed child process and stop it before returning. After the final `exec docker-entrypoint.sh ...`, PostgreSQL owns PID 1; stopping it is a container restart.
+
 ## Startup Flow
 
 ```
@@ -55,6 +57,7 @@ entrypoint.sh
 |---|---|---|---|
 | Wrapper vs fork | Wraps official `docker-entrypoint.sh` via `exec` | Fork/patch upstream entrypoint | Upstream entrypoint handles `initdb`, `POSTGRES_PASSWORD`, extension loading, `docker-entrypoint-initdb.d/` scripts. No reason to reimplement. `exec` replaces the process — PG becomes PID 1 and receives signals correctly. |
 | Feature ordering | Version check → stash → prefix/env file → restore → backup → handoff | Various | Version check blocks unsafe startup first. Restore needs WAL-G credentials and prefix resolution before fetching, but cron should start only after restore decisions are complete. |
+| Temporary PostgreSQL before handoff | `pg_ctl` child process, stopped before `exec` | Restart PID 1 PostgreSQL inside the same container | Upgrade and restore validation sometimes need a live server before normal startup. Child processes can be stopped without triggering container restart; PID 1 PostgreSQL cannot. |
 | Graceful degradation | Each feature is independently skippable | All-or-nothing | No WAL-G prefix → backup setup skips. No restore env → restore skips. The image still works as a plain PostgreSQL container with zero config. |
 
 ## Configuration
@@ -75,6 +78,7 @@ No configuration specific to the entrypoint itself. It reads env vars documented
 | Failure | Behavior |
 |---|---|
 | Version mismatch without `PG_UPGRADE` | Refuses to start with clear error message. See [upgrade-major.md](upgrade-major.md). |
+| Upgrade starts temporary PostgreSQL | It must be stopped before handoff. A failure exits the container with PGDATA restored to a retryable state where possible. |
 | Restore fails before swap | Container fails to start. Existing PGDATA is untouched. |
 | Restore env remains after success | The completed request marker causes startup to skip the already-applied request. |
 | PostgreSQL fails during WAL replay | Container fails to start. Operator can set `PG_RESTORE_ROLLBACK=true` to restore `pre-restore`. |

@@ -12,6 +12,8 @@ This is a deliberate, operator-initiated operation with an explicit gate, mandat
 
 The image stashes a copy of its PG binaries on the PVC at every startup. When the operator bumps the image to a new major version and sets `PG_UPGRADE=true`, the entrypoint detects the version mismatch and runs the upgrade using the stashed old binaries. No network download, no fat image, no init container.
 
+Upgrade must complete before the entrypoint hands off to PostgreSQL as PID 1. Any PostgreSQL process used during upgrade is a temporary `pg_ctl`-managed child process, started on localhost only and stopped before the final `exec docker-entrypoint.sh ...`. Once the final PostgreSQL process is PID 1, stopping it is a container restart, not an in-container restart.
+
 ## Pre-Upgrade Checklist
 
 Before deploying the new image with `PG_UPGRADE=true`:
@@ -21,6 +23,7 @@ Before deploying the new image with `PG_UPGRADE=true`:
 3. **Test on a clone first** — use `PG_RESTORE_FROM` with an empty PVC to spin up a copy of production, then upgrade the clone. Catches extension incompatibilities, locale issues, and `pg_upgrade --check` failures without risking the real instance.
 4. **PVC headroom** — ensure at least 2× PGDATA free space. `pg_upgrade --link` uses hard links (minimal extra), but the swap step retains `$PGDATA.old` until post-upgrade cleanup. See [image.md](image.md) PVC sizing table.
 5. **Verify recent backup** — the upgrade script refuses to proceed without a verified WAL-G backup within `PG_UPGRADE_BACKUP_MAX_AGE` (default 3600s). Confirm `wal-g backup-list` shows a recent entry, or let the upgrade script force one.
+6. **Probe window** — ensure Kubernetes liveness does not kill the pod while normal PostgreSQL is intentionally down. For the upgrade deployment, either disable liveness temporarily or configure a `startupProbe` / liveness threshold long enough to cover backup, `pg_upgrade`, ANALYZE, and the first post-upgrade backup.
 
 ## Design Decisions
 
@@ -90,6 +93,8 @@ Before handing off to `docker-entrypoint.sh`:
 
 The upgrade script registers a `trap` handler for `EXIT` / `SIGTERM` that cleans up partial state: removes `$PGDATA.new` if incomplete, swaps `$PGDATA.old` back to `$PGDATA` if the swap was interrupted. This ensures pod drains or unexpected termination during upgrade don't leave the PVC in an unrecoverable state.
 
+The script must not hand off to `docker-entrypoint.sh` until every upgrade step is complete. The old and new PostgreSQL instances below are child processes owned by the upgrade script; they are not the container's main process.
+
 ```
 upgrade (entrypoint detects version mismatch + PG_UPGRADE=true)
   │
@@ -115,6 +120,9 @@ upgrade (entrypoint detects version mismatch + PG_UPGRADE=true)
   ├─ mkdir -p /tmp/pg_upgrade && cd /tmp/pg_upgrade
   │   (deterministic CWD — pg_upgrade writes helper scripts to CWD)
   │
+  ├─ initialize new cluster at $PGDATA.new with new image binaries
+  │   (same locale, encoding, checksums, and auth assumptions as the old cluster)
+  │
   ├─ pg_upgrade --check (dry run)
   │   └─ FAILS → log incompatibility, exit 1 (PGDATA untouched)
   │
@@ -129,7 +137,7 @@ upgrade (entrypoint detects version mismatch + PG_UPGRADE=true)
   │
   ├─ swap: mv $PGDATA $PGDATA.old ; mv $PGDATA.new $PGDATA
   │
-  ├─ start PG 19 on new data (using image binaries)
+  ├─ start PG 19 on new data as a temporary child process (using image binaries)
   │   └─ FAILS → swap back ($PGDATA.old → $PGDATA), log error, exit 1:
   │     "UPGRADE FAILED: new PG would not start. Data rolled back to version 18.
   │      Revert image to pg-phoenix-image:18-latest and redeploy."
@@ -157,6 +165,8 @@ upgrade (entrypoint detects version mismatch + PG_UPGRADE=true)
 ```
 
 **Why start old PG for the backup**: `wal-g backup-push` requires a running PostgreSQL. At this point the container image is PG 19 but PGDATA is PG 18 — the image binaries can't start on old data. The stashed PG 18 binaries are used to start PG briefly on `localhost:5433`, push the backup to the `.../18` prefix, then stop cleanly before `pg_upgrade` runs. Using a non-standard port on localhost-only prevents external clients from connecting during the backup window. The script exports `PGHOST=localhost` and `PGPORT=5433` before any `wal-g` command so WAL-G discovers the temporary instance, then unsets both after stopping PG 18 to avoid affecting `pg_upgrade` and subsequent steps. Note: `default_transaction_read_only=on` cannot be used here because `wal-g backup-push` calls `pg_backup_start()`, which writes to WAL and is rejected in a read-only transaction.
+
+**Why this does not restart the container**: The upgrade script runs before the entrypoint `exec`. Its `pg_ctl start` calls create ordinary child processes that can be stopped without ending PID 1. The final PostgreSQL process only becomes PID 1 after upgrade success, when the entrypoint resumes and performs the normal handoff.
 
 **Prefix handling during upgrade**: The upgrade script saves the original (un-suffixed) prefix in a local variable (`BASE_PREFIX`) before any WAL-G operations. It temporarily overrides `WALG_S3_PREFIX` to `$BASE_PREFIX/18` for the pre-upgrade backup and `$BASE_PREFIX/19` for the post-upgrade backup, then restores the original un-suffixed value before returning to the entrypoint. This ensures entrypoint step 3 (version-prefix) can apply the correct `/<major>/` suffix without producing a double-suffix like `.../18/19`.
 
@@ -207,6 +217,7 @@ No automation — major upgrades are infrequent and the cleanup decision require
 | `pg_upgrade --check` fails | Pre-upgrade | Can't upgrade | PGDATA untouched. Incompatible extension, locale mismatch, etc. Operator fixes the issue or stays on old version. |
 | `pg_upgrade --link` fails mid-run | During upgrade | New data dir incomplete | Old PGDATA untouched (link, not copy). Script removes partial new dir. Container exits with message: revert image to old version. |
 | New PG fails to start | Post-upgrade | New data dir exists but PG won't run | Script swaps old data dir back. Container exits with message: revert image to old version. |
+| Kubernetes liveness kills pod during upgrade | Any upgrade phase before handoff | Upgrade is interrupted | Trap cleanup restores a retryable data state where possible. Operator must fix the probe window before retrying. |
 | New PG starts but app breaks (discovered later) | Post-upgrade, post-start | Running but broken | Operator reverts image tag. If data was written on new version, operator requests startup restore from the pre-upgrade WAL-G backup. Loses writes since upgrade. |
 | WAL-G backup fails before upgrade | Pre-upgrade | Can't upgrade | Refuses to proceed without verified backup. Operator fixes backup issue first. |
 

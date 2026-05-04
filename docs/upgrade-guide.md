@@ -46,6 +46,7 @@ Operator-initiated. Requires an explicit gate. For design details and rollback p
   The stash is created on every boot, so it should always exist unless manually deleted.
 - [ ] Test the upgrade in a non-production environment first (clone + upgrade)
 - [ ] Schedule a maintenance window — PG will be unavailable during upgrade
+- [ ] Adjust probes for the maintenance window — normal PostgreSQL is intentionally down until the upgrade finishes, so liveness must not restart the pod mid-upgrade. Temporarily disable liveness or use a `startupProbe` / failure threshold that covers backup, `pg_upgrade`, ANALYZE, and the first post-upgrade backup.
 
 ### Procedure
 
@@ -71,14 +72,18 @@ The pod restarts. The entrypoint:
 2. Starts PG 18 from stashed binaries (non-standard port on localhost-only to prevent external clients from connecting during the backup)
 3. Pushes a pre-upgrade backup to `.../18` prefix
 4. Stops PG 18
-5. Runs `pg_upgrade --check` (dry run)
-6. Runs `pg_upgrade --link`
-7. Swaps data directories
-8. Starts PG 19
-9. Runs `ANALYZE`
-10. Takes first backup on `.../19` prefix
+5. Initializes `$PGDATA.new` with the PG 19 binaries
+6. Runs `pg_upgrade --check` (dry run)
+7. Runs `pg_upgrade --link`
+8. Swaps data directories
+9. Starts PG 19 as a temporary child process
+10. Runs `ANALYZE`
+11. Takes first backup on `.../19` prefix
+12. Stops temporary PG 19, then hands off to normal container PostgreSQL
 
 > Step 3 auto-verifies backup freshness (< 1 hour). If the latest backup is stale or missing, a fresh one is pushed automatically. If the backup push fails, the upgrade is refused.
+>
+> The PostgreSQL processes in steps 2 and 9 are not PID 1. They are `pg_ctl`-managed child processes owned by the upgrade script, so stopping them does not restart the container. PostgreSQL becomes the container's main process only after the final entrypoint handoff.
 
 **3. Monitor the pod logs:**
 
@@ -143,4 +148,5 @@ env:
 | "FATAL: PGDATA is version 18 but this image runs PostgreSQL 19" | `PG_UPGRADE` not set | Add `PG_UPGRADE=true` to env, or revert image to match data version. |
 | "no stashed binaries for version 18" | Stash manually deleted or PVC mount issue | Restart once on current image to recreate, or verify PVC is mounted at `/var/lib/postgresql/`. |
 | `pg_upgrade --check` fails | Incompatible extension, locale mismatch, etc. | Read the error in pod logs. Fix the issue (e.g. install missing extension on new version). |
+| Pod restarts while upgrade is still running | Liveness probe is checking normal port 5432 before handoff | Disable liveness for the upgrade rollout or add a startup window long enough for the full upgrade. Then redeploy and retry. |
 | Upgrade succeeded but app errors | PG 19 behavioral changes | Check PG release notes. Revert if needed (see Rollback above). |

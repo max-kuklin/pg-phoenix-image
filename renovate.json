@@ -1,0 +1,46 @@
+{
+  "extends": [
+    "config:recommended",
+    "docker:pinDigests"
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "fileMatch": [
+        "^Dockerfile$"
+      ],
+      "matchStrings": [
+        "ARG WALG_VERSION=(?<currentValue>v[\\d.]+)"
+      ],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "wal-g/wal-g"
+    }
+  ],
+  "packageRules": [
+    {
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "postgres"
+      ],
+      "automerge": true,
+      "automergeType": "pr",
+      "schedule": [
+        "every 6 hours"
+      ]
+    },
+    {
+      "matchDatasources": [
+        "github-releases"
+      ],
+      "matchPackageNames": [
+        "wal-g/wal-g"
+      ],
+      "automerge": false,
+      "schedule": [
+        "every 6 hours"
+      ]
+    }
+  ]
+}
