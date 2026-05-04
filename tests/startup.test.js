@@ -74,6 +74,16 @@ async function withPgData(callback) {
     await chmod(pgDataParent, 0o777);
     return await callback({ pgDataParent });
   } finally {
+    await execFileAsync('docker', [
+      'run',
+      '--rm',
+      '--volume',
+      `${pgDataParent}:/var/lib/postgresql:rw`,
+      IMAGE_NAME,
+      'bash',
+      '-lc',
+      'chmod -R 0777 /var/lib/postgresql || true'
+    ]).catch(() => {});
     await rm(pgDataParent, { recursive: true, force: true });
   }
 }
