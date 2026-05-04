@@ -114,6 +114,16 @@ describe('backup with MinIO', () => {
     expect(listing).toContain('wal_');
   });
 
+  test('does not write backup objects to the flat unversioned prefix', async () => {
+    const listing = await runMinioClient(topology.network, `mc find local/${MINIO_BUCKET}/pg`);
+    const objectLines = listing
+      .split('\n')
+      .filter((line) => line.includes('basebackups_') || line.includes('wal_'));
+
+    expect(objectLines.length).toBeGreaterThan(0);
+    expect(objectLines.every((line) => line.includes(`local/${MINIO_BUCKET}/pg/18/`))).toBe(true);
+  });
+
   test('retains only the configured number of full backups', async () => {
     const backup = await topology.pg.exec(['backup.sh'], { user: 'postgres' });
     const list = await topology.pg.exec(['bash', '-lc', '. /etc/walg-env.sh && wal-g backup-list']);

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { chmod, mkdtemp, rm } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -12,6 +12,10 @@ async function runImage(env = {}, options = {}) {
   const name = `pg-phoenix-startup-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const args = ['run', '--rm', '--name', name];
 
+  if (options.entrypoint) {
+    args.push('--entrypoint', options.entrypoint);
+  }
+
   for (const [key, value] of Object.entries(env)) {
     args.push('--env', `${key}=${value}`);
   }
@@ -20,7 +24,7 @@ async function runImage(env = {}, options = {}) {
     args.push('--volume', `${bindMount.source}:${bindMount.target}:${bindMount.mode ?? 'rw'}`);
   }
 
-  args.push(IMAGE_NAME, 'postgres');
+  args.push(IMAGE_NAME, ...(options.command ?? ['postgres']));
 
   try {
     const result = await execFileAsync('docker', args, {
@@ -42,6 +46,25 @@ async function runImage(env = {}, options = {}) {
       stderr: error.stderr ?? ''
     };
   }
+}
+
+async function setupPgData(pgDataParent, script) {
+  const setup = await execFileAsync('docker', [
+    'run',
+    '--rm',
+    '--volume',
+    `${pgDataParent}:/var/lib/postgresql:rw`,
+    IMAGE_NAME,
+    'bash',
+    '-lc',
+    script
+  ]);
+
+  expect(setup.stderr).toBe('');
+}
+
+async function readPgDataFile(pgDataParent, relativePath) {
+  return readFile(path.join(pgDataParent, relativePath), 'utf8');
 }
 
 async function withPgData(callback) {
@@ -101,17 +124,10 @@ describe('startup behavior', () => {
 
   test('refuses restore over existing PGDATA without overwrite gate', async () => {
     await withPgData(async ({ pgDataParent }) => {
-      const setup = await execFileAsync('docker', [
-        'run',
-        '--rm',
-        '--volume',
-        `${pgDataParent}:/var/lib/postgresql:rw`,
-        IMAGE_NAME,
-        'bash',
-        '-lc',
+      await setupPgData(
+        pgDataParent,
         'mkdir -p /var/lib/postgresql/18/docker && printf "18\\n" > /var/lib/postgresql/18/docker/PG_VERSION && chmod -R 0777 /var/lib/postgresql'
-      ]);
-      expect(setup.stderr).toBe('');
+      );
 
       const result = await runImage(
         {
@@ -126,6 +142,126 @@ describe('startup behavior', () => {
 
       expect(result.code).toBe(1);
       expect(result.stderr).toContain('[restore] PGDATA exists; set PG_RESTORE_OVERWRITE=true to restore over existing data');
+    });
+  });
+
+  test('failed restore fetch leaves existing PGDATA untouched', async () => {
+    await withPgData(async ({ pgDataParent }) => {
+      const fakeBin = await mkdtemp(path.join(tmpdir(), 'pg-phoenix-bin-'));
+      const fakeWalG = path.join(fakeBin, 'wal-g');
+      await writeFile(fakeWalG, '#!/usr/bin/env bash\nprintf "fake wal-g failure\\n" >&2\nexit 37\n', 'utf8');
+      await chmod(fakeWalG, 0o755);
+
+      try {
+        await setupPgData(
+          pgDataParent,
+          [
+            'mkdir -p /var/lib/postgresql/18/docker',
+            'printf "18\\n" > /var/lib/postgresql/18/docker/PG_VERSION',
+            'printf "original\\n" > /var/lib/postgresql/18/docker/sentinel',
+            'chmod -R 0777 /var/lib/postgresql'
+          ].join(' && ')
+        );
+
+        const result = await runImage(
+          {
+            POSTGRES_PASSWORD: 'test',
+            PATH: '/tmp/bin:/usr/lib/postgresql/18/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+            WALG_S3_PREFIX: 's3://pg-phoenix-missing/target',
+            PG_RESTORE_FROM: 's3://pg-phoenix-missing/source/18',
+            PG_RESTORE_REQUEST_ID: 'failed-fetch',
+            PG_RESTORE_OVERWRITE: 'true'
+          },
+          {
+            bindMounts: [
+              { source: pgDataParent, target: '/var/lib/postgresql', mode: 'rw' },
+              { source: fakeBin, target: '/tmp/bin', mode: 'ro' }
+            ]
+          }
+        );
+
+        const sentinel = await readPgDataFile(pgDataParent, '18/docker/sentinel');
+
+        expect(result.code, result.stderr).toBe(37);
+        expect(result.stderr).toContain('[restore] ------ fetching backup ------');
+        expect(result.stderr).toContain('fake wal-g failure');
+        expect(sentinel).toBe('original\n');
+      } finally {
+        await rm(fakeBin, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test('rollback swaps pre-restore data back into PGDATA', async () => {
+    await withPgData(async ({ pgDataParent }) => {
+      await setupPgData(
+        pgDataParent,
+        [
+          'mkdir -p /var/lib/postgresql/18/docker /var/lib/postgresql/18/pre-restore',
+          'printf "18\\n" > /var/lib/postgresql/18/docker/PG_VERSION',
+          'printf "current\\n" > /var/lib/postgresql/18/docker/sentinel',
+          'printf "18\\n" > /var/lib/postgresql/18/pre-restore/PG_VERSION',
+          'printf "previous\\n" > /var/lib/postgresql/18/pre-restore/sentinel',
+          'chmod -R 0777 /var/lib/postgresql'
+        ].join(' && ')
+      );
+
+      const result = await runImage(
+        {
+          RESTORE_ROLLBACK: 'true',
+          RESTORE_REQUEST_ID: 'rollback-e2e'
+        },
+        {
+          entrypoint: '/bin/bash',
+          command: ['-lc', '/usr/local/bin/restore.sh'],
+          bindMounts: [{ source: pgDataParent, target: '/var/lib/postgresql', mode: 'rw' }]
+        }
+      );
+
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stderr).toContain('[restore] pre-restore data restored');
+
+      const active = await readPgDataFile(pgDataParent, '18/docker/sentinel');
+      const failed = await readPgDataFile(pgDataParent, '18/failed-restore/sentinel');
+      const marker = await readPgDataFile(pgDataParent, '18/restore-state/rollback-e2e.rollback-completed');
+
+      expect(active).toBe('previous\n');
+      expect(failed).toBe('current\n');
+      expect(marker).toContain('T');
+    });
+  });
+
+  test('completed rollback request id skips safely', async () => {
+    await withPgData(async ({ pgDataParent }) => {
+      await setupPgData(
+        pgDataParent,
+        [
+          'mkdir -p /var/lib/postgresql/18/docker /var/lib/postgresql/18/restore-state',
+          'printf "18\\n" > /var/lib/postgresql/18/docker/PG_VERSION',
+          'printf "current\\n" > /var/lib/postgresql/18/docker/sentinel',
+          'printf "done\\n" > /var/lib/postgresql/18/restore-state/rollback-e2e.rollback-completed',
+          'chmod -R 0777 /var/lib/postgresql'
+        ].join(' && ')
+      );
+
+      const result = await runImage(
+        {
+          RESTORE_ROLLBACK: 'true',
+          RESTORE_REQUEST_ID: 'rollback-e2e'
+        },
+        {
+          entrypoint: '/bin/bash',
+          command: ['-lc', '/usr/local/bin/restore.sh'],
+          bindMounts: [{ source: pgDataParent, target: '/var/lib/postgresql', mode: 'rw' }]
+        }
+      );
+
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stderr).toContain('[restore] restore rollback request already completed; skipping');
+
+      const active = await readPgDataFile(pgDataParent, '18/docker/sentinel');
+
+      expect(active).toBe('current\n');
     });
   });
 });
