@@ -7,7 +7,7 @@ Keep the TDD loop practical for a PostgreSQL image whose real behavior depends o
 | Layer | Scope | Default use |
 |---|---|---|
 | Script contract tests | Small Bash contracts that are expensive to debug through E2E output | Quoting, validation, parsing, prefix logic |
-| Image and E2E tests | Real container behavior with PostgreSQL, WAL-G, and MinIO | Main development and pre-merge confidence |
+| Image and E2E tests | Real container behavior with PostgreSQL, WAL-G, and S3-compatible object storage | Main development and pre-merge confidence |
 
 Script contract tests are intentionally limited. They are not a separate mock-heavy unit-test architecture for Bash scripts. Most script behavior should be proved through real containers.
 
@@ -19,7 +19,7 @@ Script contract tests are intentionally limited. They are not a separate mock-he
 | `docker build -t pg-phoenix-image:test .` | Local image build | Before any image or E2E test |
 | `npm run test:image` | Single-PG image smoke suite | Checking image startup/config/runtime surface |
 | `npm test -- tests/startup.test.js` | Fast entrypoint refusal scenarios | Changing startup env gates |
-| `npm run test:e2e` | Startup gates plus PG + MinIO backup/restore suite | Working on WAL-G backup or restore |
+| `npm run test:e2e` | Startup gates plus PG + SeaweedFS S3 backup/restore suite | Working on WAL-G backup or restore |
 | `npm run test:report` | Full suite plus timing report with inline duration bars | Comparing test runtime |
 | `npm test` | Full suite | Before merge or release |
 
@@ -67,7 +67,7 @@ As scripts grow, shared pure behavior should move into small sourceable files un
 
 ## Layer 2: Image and E2E Tests
 
-This is the main test layer. It proves the image behaves correctly with real PostgreSQL and, where needed, real WAL-G and MinIO.
+This is the main test layer. It proves the image behaves correctly with real PostgreSQL and, where needed, real WAL-G and S3-compatible object storage. The current Testcontainers backend is SeaweedFS S3; tests use backend-neutral helpers so the storage implementation remains replaceable.
 
 Top-level test files are grouped by container topology, not by feature, to minimize container starts:
 
@@ -100,24 +100,24 @@ Each scenario uses a new container because entrypoint behavior is mostly env-dri
 | Scenario | Topology |
 |---|---|
 | No WAL-G env starts plain PostgreSQL | PG only |
-| WAL-G prefix with valid schedule configures archiving and cron | PG + MinIO |
-| WAL-G prefix without `BACKUP_SCHEDULE` refuses startup | PG + MinIO |
-| Invalid `ARCHIVE_TIMEOUT` refuses startup | PG + MinIO |
-| Invalid `BACKUP_SCHEDULE` refuses startup | PG + MinIO |
-| Restore env over existing PGDATA without overwrite gate refuses startup | PG + MinIO |
-| Restore env without request ID refuses startup | PG + MinIO |
-| Completed restore request ID is skipped on restart | PG + MinIO |
-| Restore rollback env swaps `pre-restore` back | PG + MinIO |
-| Completed rollback request ID is skipped on restart | PG + MinIO |
-| Clone env on empty PGDATA triggers startup restore | 2x PG + MinIO |
-| Clone env on existing PGDATA is skipped | PG + MinIO |
+| WAL-G prefix with valid schedule configures archiving and cron | PG + object storage |
+| WAL-G prefix without `BACKUP_SCHEDULE` refuses startup | PG + object storage |
+| Invalid `ARCHIVE_TIMEOUT` refuses startup | PG + object storage |
+| Invalid `BACKUP_SCHEDULE` refuses startup | PG + object storage |
+| Restore env over existing PGDATA without overwrite gate refuses startup | PG + object storage |
+| Restore env without request ID refuses startup | PG + object storage |
+| Completed restore request ID is skipped on restart | PG + object storage |
+| Restore rollback env swaps `pre-restore` back | PG + object storage |
+| Completed rollback request ID is skipped on restart | PG + object storage |
+| Clone env on empty PGDATA triggers startup restore | 2x PG + object storage |
+| Clone env on existing PGDATA is skipped | PG + object storage |
 | Version mismatch without `PG_UPGRADE` refuses startup | PG only |
 | Binary stash exists after startup | PG only |
 | Postgres receives signals correctly after entrypoint handoff | PG only |
 
-### `backup-restore.test.js`: PG + MinIO
+### `backup-restore.test.js`: PG + Object Storage
 
-One shared PG + MinIO pair. Backup tests create the state that restore tests consume.
+One shared PG + SeaweedFS S3 pair. Backup tests create the state that restore tests consume.
 
 | Group | Scenarios | State |
 |---|---|---|
@@ -125,7 +125,7 @@ One shared PG + MinIO pair. Backup tests create the state that restore tests con
 | Backup without creds | No WAL-G credentials configured, graceful skip | Fresh PG container |
 | Restore | startup latest restore, startup PITR, overwrite gate, failed fetch leaves PGDATA untouched, explicit rollback | Sequential |
 
-### `clone.test.js`: Source + Target + MinIO
+### `clone.test.js`: Source + Target + Object Storage
 
 Validates cross-instance clone behavior. `startup.test.js` checks that clone is triggered; this file checks data fidelity.
 
@@ -136,7 +136,7 @@ Validates cross-instance clone behavior. `startup.test.js` checks that clone is 
 | Restart after clone does not overwrite PGDATA | Depends on prior clone |
 | Bad source prefix fails clearly | Fresh container |
 
-### `upgrade.test.js`: Two PostgreSQL Majors + MinIO
+### `upgrade.test.js`: Two PostgreSQL Majors + Object Storage
 
 Slowest suite. It builds old/new image variants via the Dockerfile `PG_BASE` build arg. Defaults are controlled by `PG_TEST_OLD` and `PG_TEST_NEW`.
 
@@ -154,7 +154,7 @@ The full upgrade suite is a pre-merge/release gate, not the normal edit loop. CI
 `tests/helpers/containers.js` centralizes image name, env defaults, wait strategies, and container cleanup. It exposes:
 
 - `startPg(overrides?)`: single PostgreSQL container, default `POSTGRES_PASSWORD=test`
-- `startPgWithMinio(overrides?)`: PostgreSQL plus MinIO, bucket initialization, and WAL-G env
+- `startPgWithObjectStorage(overrides?)`: PostgreSQL plus SeaweedFS S3, bucket initialization, and WAL-G env
 - restore helpers should use mounted Docker volumes for PGDATA when validating startup restore and rollback behavior
 
 `tests/helpers/shell.js` centralizes Linux Bash execution for script contract tests.

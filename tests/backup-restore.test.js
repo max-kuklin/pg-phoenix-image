@@ -4,7 +4,14 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Wait } from 'testcontainers';
-import { MINIO_BUCKET, minioPgEnv, runMinioClient, startMinio, startPg, startPgWithMinio } from './helpers/containers.js';
+import {
+  OBJECT_STORAGE_BUCKET,
+  listObjectStorageObjects,
+  objectStoragePgEnv,
+  startObjectStorage,
+  startPg,
+  startPgWithObjectStorage
+} from './helpers/containers.js';
 
 async function containerLogs(container) {
   const stream = await container.logs({ tail: 200 });
@@ -34,12 +41,12 @@ async function waitForQuery(pgContainer, sql, timeoutMs = 60_000) {
   throw new Error(`PostgreSQL did not become queryable: ${lastError?.message ?? 'unknown'}\n${logs}`);
 }
 
-async function waitForMinioObject(topology, prefix, pattern, timeoutMs = 30_000) {
+async function waitForObjectStorageObject(topology, prefix, pattern, timeoutMs = 30_000) {
   const startedAt = Date.now();
   let listing = '';
 
   while (Date.now() - startedAt < timeoutMs) {
-    listing = await runMinioClient(topology.network, `mc find local/${MINIO_BUCKET}/${prefix}`);
+    listing = await listObjectStorageObjects(topology.network, prefix);
 
     if (pattern.test(listing)) {
       return listing;
@@ -48,14 +55,14 @@ async function waitForMinioObject(topology, prefix, pattern, timeoutMs = 30_000)
     await delay(250);
   }
 
-  throw new Error(`MinIO object matching ${pattern} was not found under ${prefix}\n${listing}`);
+  throw new Error(`Object storage entry matching ${pattern} was not found under ${prefix}\n${listing}`);
 }
 
-describe('backup with MinIO', () => {
+describe('backup with S3-compatible object storage', () => {
   let topology;
 
   beforeAll(async () => {
-    topology = await startPgWithMinio({
+    topology = await startPgWithObjectStorage({
       env: {
         BACKUP_RETAIN_FULL: '1'
       }
@@ -97,9 +104,9 @@ describe('backup with MinIO', () => {
   });
 
   test('stores base backup objects under the version-scoped prefix', async () => {
-    const listing = await waitForMinioObject(topology, 'pg/18', /basebackups_/);
+    const listing = await waitForObjectStorageObject(topology, 'pg/18', /basebackups_/);
 
-    expect(listing).toContain(`local/${MINIO_BUCKET}/pg/18/`);
+    expect(listing).toContain(`s3://${OBJECT_STORAGE_BUCKET}/pg/18/`);
     expect(listing).toContain('basebackups_');
   });
 
@@ -108,20 +115,20 @@ describe('backup with MinIO', () => {
     await topology.pg.query('INSERT INTO phase3_wal_check VALUES (1)');
     await topology.pg.query('SELECT pg_switch_wal()');
 
-    const listing = await waitForMinioObject(topology, 'pg/18', /wal_/);
+    const listing = await waitForObjectStorageObject(topology, 'pg/18', /wal_/);
 
-    expect(listing).toContain(`local/${MINIO_BUCKET}/pg/18/`);
+    expect(listing).toContain(`s3://${OBJECT_STORAGE_BUCKET}/pg/18/`);
     expect(listing).toContain('wal_');
   });
 
   test('does not write backup objects to the flat unversioned prefix', async () => {
-    const listing = await runMinioClient(topology.network, `mc find local/${MINIO_BUCKET}/pg`);
+    const listing = await listObjectStorageObjects(topology.network, 'pg');
     const objectLines = listing
       .split('\n')
       .filter((line) => line.includes('basebackups_') || line.includes('wal_'));
 
     expect(objectLines.length).toBeGreaterThan(0);
-    expect(objectLines.every((line) => line.includes(`local/${MINIO_BUCKET}/pg/18/`))).toBe(true);
+    expect(objectLines.every((line) => line.includes(`s3://${OBJECT_STORAGE_BUCKET}/pg/18/`))).toBe(true);
   });
 
   test('retains only the configured number of full backups', async () => {
@@ -158,7 +165,7 @@ describe('backup without WAL-G configuration', () => {
   });
 });
 
-describe('startup restore with MinIO', () => {
+describe('startup restore with S3-compatible object storage', () => {
   let topology;
   let source;
   let target;
@@ -166,11 +173,11 @@ describe('startup restore with MinIO', () => {
   let pitrTargetTime;
 
   beforeAll(async () => {
-    topology = await startMinio();
+    topology = await startObjectStorage();
     source = await startPg({
       network: topology.network,
       networkAliases: ['restore-source'],
-      env: minioPgEnv('s3://pg-phoenix-test/restore-source')
+      env: objectStoragePgEnv('s3://pg-phoenix-test/restore-source')
     });
 
     await source.query('CREATE TABLE restore_e2e_check (id int PRIMARY KEY, value text)');
@@ -206,7 +213,7 @@ describe('startup restore with MinIO', () => {
   test('restores into empty PGDATA and skips the completed request on restart', async () => {
     const bindMounts = [{ source: pgDataDir, target: '/var/lib/postgresql', mode: 'rw' }];
     const restoreEnv = {
-      ...minioPgEnv('s3://pg-phoenix-test/restore-target'),
+      ...objectStoragePgEnv('s3://pg-phoenix-test/restore-target'),
       PG_RESTORE_FROM: 's3://pg-phoenix-test/restore-source/18',
       PG_RESTORE_REQUEST_ID: 'restore-e2e-latest'
     };
@@ -250,7 +257,7 @@ describe('startup restore with MinIO', () => {
         bindMounts: [{ source: pitrDataDir, target: '/var/lib/postgresql', mode: 'rw' }],
         waitStrategy: Wait.forLogMessage(/restore prepared for PostgreSQL startup/),
         env: {
-          ...minioPgEnv('s3://pg-phoenix-test/restore-pitr-target'),
+          ...objectStoragePgEnv('s3://pg-phoenix-test/restore-pitr-target'),
           PG_RESTORE_FROM: 's3://pg-phoenix-test/restore-source/18',
           PG_RESTORE_TARGET_TIME: pitrTargetTime,
           PG_RESTORE_REQUEST_ID: 'restore-e2e-pitr'

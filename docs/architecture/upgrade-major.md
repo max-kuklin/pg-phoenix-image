@@ -225,7 +225,7 @@ No automation — major upgrades are infrequent and the cleanup decision require
 
 ### E2E — `tests/upgrade.test.js`
 
-Spins up pg-phoenix-image (two major versions) + MinIO containers via Testcontainers (see [testing.md](testing.md)):
+Spins up pg-phoenix-image (two major versions) + SeaweedFS S3 containers via Testcontainers (see [testing.md](testing.md)):
 
 **Upgrade flow:**
 - Version mismatch without gate → container refuses to start with clear error

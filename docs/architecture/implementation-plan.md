@@ -4,7 +4,7 @@
 
 ## Current Status
 
-Phases 1 through 4 are implemented for the current scope: WAL-G setup, backup, startup restore, clone-from-prefix restore, restore idempotency, rollback markers, version mismatch detection, `PG_UPGRADE` dispatch, binary stash behavior, and startup coverage are in place. Clone behavior is covered by the MinIO restore E2E instead of a separate duplicate file. Phase 5 is design-only; `upgrade.sh` is still a stub. Phase 6 has CI coverage for main and PR events plus Renovate digest pinning configuration.
+Phases 1 through 4 are implemented for the current scope: WAL-G setup, backup, startup restore, clone-from-prefix restore, restore idempotency, rollback markers, version mismatch detection, `PG_UPGRADE` dispatch, binary stash behavior, and startup coverage are in place. Clone behavior is covered by the object-storage restore E2E instead of a separate duplicate file. Phase 5 is design-only; `upgrade.sh` is still a stub. Phase 6 has CI coverage for main and PR events plus Renovate digest pinning configuration.
 
 ## Phase 1: Foundation
 
@@ -42,7 +42,7 @@ npm test -- tests/pg-only.test.js
 |---|---|---|---|
 | 6 | minimal backup/restore contracts: env file quoting, prefix selection, restore args | Phase 1 | contract tests only where pure Bash value exists |
 | 7 | `scripts/backup.sh`, `scripts/restore.sh`, and WAL-G startup setup in `entrypoint.sh` | Phase 2 plus step 6 | image still starts; contract tests pass |
-| 8 | `tests/backup-restore.test.js` | steps 6-7 | write E2E tests for real WAL-G/MinIO behavior |
+| 8 | `tests/backup-restore.test.js` | steps 6-7 | write E2E tests for real WAL-G/S3-compatible object storage behavior |
 
 Backup and restore are primarily E2E-tested because their correctness depends on real PostgreSQL, WAL-G, object storage, WAL replay, and failure recovery. Contract tests cover only the Bash pieces that are hard to diagnose through container logs.
 
@@ -59,7 +59,7 @@ The entrypoint WAL-G setup is implemented in this phase because backup E2E needs
 
 Entrypoint ties the image together: version check, binary stash, startup restore selection, and handoff to the official PostgreSQL entrypoint. WAL-G backup setup is already covered by Phase 3 because backup E2E depends on it. Pure env/path decisions can have contracts, but process behavior belongs in `startup.test.js`.
 
-Clone restore is validated in `tests/backup-restore.test.js` because it needs the same MinIO topology as restore. `startup.test.js` only needs to prove that the entrypoint selects the restore path and respects the overwrite/rollback gates.
+Clone restore is validated in `tests/backup-restore.test.js` because it needs the same object storage topology as restore. `startup.test.js` only needs to prove that the entrypoint selects the restore path and respects the overwrite/rollback gates.
 
 ## Phase 5: Upgrade
 

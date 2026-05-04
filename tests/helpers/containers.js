@@ -4,11 +4,12 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 export const IMAGE_NAME = process.env.PG_PHOENIX_IMAGE || 'pg-phoenix-image:test';
 export const POSTGRES_PASSWORD = 'test';
-export const MINIO_IMAGE = process.env.MINIO_IMAGE || 'minio/minio:RELEASE.2025-09-07T16-13-09Z';
-export const MINIO_CLIENT_IMAGE = process.env.MINIO_CLIENT_IMAGE || 'minio/mc:RELEASE.2025-08-13T08-35-41Z';
-export const MINIO_ACCESS_KEY = 'minioadmin';
-export const MINIO_SECRET_KEY = 'minioadmin';
-export const MINIO_BUCKET = 'pg-phoenix-test';
+export const OBJECT_STORAGE_IMAGE = process.env.OBJECT_STORAGE_IMAGE || 'chrislusf/seaweedfs:4.22';
+export const OBJECT_STORAGE_CLIENT_IMAGE = process.env.OBJECT_STORAGE_CLIENT_IMAGE || 'amazon/aws-cli:2.31.33';
+export const OBJECT_STORAGE_ACCESS_KEY = 'testadmin';
+export const OBJECT_STORAGE_SECRET_KEY = 'testsecret';
+export const OBJECT_STORAGE_BUCKET = 'pg-phoenix-test';
+const OBJECT_STORAGE_ENDPOINT = 'http://object-storage:8333';
 
 export async function startPg(overrides = {}) {
   const env = {
@@ -73,49 +74,50 @@ export async function queryPg(connection, text, params = []) {
   }
 }
 
-export async function startMinio() {
+export async function startObjectStorage() {
   const network = await new Network().start();
 
-  let minio;
+  let objectStorage;
 
   try {
-    minio = await new GenericContainer(MINIO_IMAGE)
-      .withCommand(['server', '/data'])
+    objectStorage = await new GenericContainer(OBJECT_STORAGE_IMAGE)
+      .withCommand(['server', '-s3'])
       .withEnvironment({
-        MINIO_ROOT_USER: MINIO_ACCESS_KEY,
-        MINIO_ROOT_PASSWORD: MINIO_SECRET_KEY
+        AWS_ACCESS_KEY_ID: OBJECT_STORAGE_ACCESS_KEY,
+        AWS_SECRET_ACCESS_KEY: OBJECT_STORAGE_SECRET_KEY
       })
       .withNetwork(network)
-      .withNetworkAliases('minio')
-      .withExposedPorts(9000)
-      .withWaitStrategy(Wait.forHttp('/minio/health/ready', 9000).forStatusCode(200))
+      .withNetworkAliases('object-storage')
+      .withExposedPorts(8333)
+      .withWaitStrategy(Wait.forListeningPorts())
       .start();
 
-    const minioClient = await new GenericContainer(MINIO_CLIENT_IMAGE)
+    const objectStorageClient = await new GenericContainer(OBJECT_STORAGE_CLIENT_IMAGE)
       .withNetwork(network)
-      .withEntrypoint(['sh'])
+      .withEntrypoint(['aws'])
+      .withEnvironment(objectStorageClientEnv())
       .withCommand([
-        '-c',
-        [
-          `mc alias set local http://minio:9000 ${MINIO_ACCESS_KEY} ${MINIO_SECRET_KEY}`,
-          `mc mb --ignore-existing local/${MINIO_BUCKET}`
-        ].join(' && ')
+        '--endpoint-url',
+        OBJECT_STORAGE_ENDPOINT,
+        's3',
+        'mb',
+        `s3://${OBJECT_STORAGE_BUCKET}`
       ])
       .withWaitStrategy(Wait.forOneShotStartup())
       .start();
-    await minioClient.stop();
+    await objectStorageClient.stop();
 
     return {
-      minio,
+      objectStorage,
       network,
-      bucket: MINIO_BUCKET,
+      bucket: OBJECT_STORAGE_BUCKET,
       stop: async () => {
-        await minio?.stop();
+        await objectStorage?.stop();
         await stopNetwork(network);
       }
     };
   } catch (error) {
-    await minio?.stop();
+    await objectStorage?.stop();
     await stopNetwork(network);
     throw error;
   }
@@ -137,16 +139,26 @@ async function stopNetwork(network) {
   throw lastError;
 }
 
-export async function runMinioClient(network, command) {
-  const container = await new GenericContainer(MINIO_CLIENT_IMAGE)
+function objectStorageClientEnv() {
+  return {
+    AWS_ACCESS_KEY_ID: OBJECT_STORAGE_ACCESS_KEY,
+    AWS_SECRET_ACCESS_KEY: OBJECT_STORAGE_SECRET_KEY,
+    AWS_DEFAULT_REGION: 'us-east-1'
+  };
+}
+
+export async function listObjectStorageObjects(network, prefix) {
+  const container = await new GenericContainer(OBJECT_STORAGE_CLIENT_IMAGE)
     .withNetwork(network)
-    .withEntrypoint(['sh'])
+    .withEntrypoint(['aws'])
+    .withEnvironment(objectStorageClientEnv())
     .withCommand([
-      '-c',
-      [
-        `mc alias set local http://minio:9000 ${MINIO_ACCESS_KEY} ${MINIO_SECRET_KEY} >/dev/null`,
-        command
-      ].join(' && ')
+      '--endpoint-url',
+      OBJECT_STORAGE_ENDPOINT,
+      's3',
+      'ls',
+      `s3://${OBJECT_STORAGE_BUCKET}/${prefix}`,
+      '--recursive'
     ])
     .withWaitStrategy(Wait.forOneShotStartup())
     .start();
@@ -159,18 +171,24 @@ export async function runMinioClient(network, command) {
       chunks.push(Buffer.from(chunk).toString('utf8'));
     }
 
-    return chunks.join('');
+    return chunks
+      .join('')
+      .split('\n')
+      .map((line) => line.trim().split(/\s+/).at(-1))
+      .filter(Boolean)
+      .map((key) => `s3://${OBJECT_STORAGE_BUCKET}/${key}`)
+      .join('\n');
   } finally {
     await container.stop();
   }
 }
 
-export function minioPgEnv(prefix = `s3://${MINIO_BUCKET}/pg`) {
+export function objectStoragePgEnv(prefix = `s3://${OBJECT_STORAGE_BUCKET}/pg`) {
   return {
     WALG_S3_PREFIX: prefix,
-    AWS_ACCESS_KEY_ID: MINIO_ACCESS_KEY,
-    AWS_SECRET_ACCESS_KEY: MINIO_SECRET_KEY,
-    AWS_ENDPOINT: 'http://minio:9000',
+    AWS_ACCESS_KEY_ID: OBJECT_STORAGE_ACCESS_KEY,
+    AWS_SECRET_ACCESS_KEY: OBJECT_STORAGE_SECRET_KEY,
+    AWS_ENDPOINT: 'http://object-storage:8333',
     AWS_REGION: 'us-east-1',
     AWS_S3_FORCE_PATH_STYLE: 'true',
     BACKUP_SCHEDULE: '0 0 * * *',
@@ -178,8 +196,8 @@ export function minioPgEnv(prefix = `s3://${MINIO_BUCKET}/pg`) {
   };
 }
 
-export async function startPgWithMinio(overrides = {}) {
-  const topology = await startMinio();
+export async function startPgWithObjectStorage(overrides = {}) {
+  const topology = await startObjectStorage();
   let pgContainer;
 
   try {
@@ -188,7 +206,7 @@ export async function startPgWithMinio(overrides = {}) {
       networkAliases: ['pg'],
       bindMounts: overrides.bindMounts,
       env: {
-        ...minioPgEnv(),
+        ...objectStoragePgEnv(),
         ...overrides.env
       }
     });

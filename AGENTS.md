@@ -13,6 +13,6 @@ Never include full code snippets in documentation, instead provide high-level ov
 All scripts source `scripts/lib/logger.sh` (installed to `/usr/local/lib/logger.sh` in the container). Use `log_info`, `log_warn`, `log_error`, `log_debug`, `log_fatal` (error + exit 1), `log_phase` (section markers). Set `LOG_COMPONENT` before sourcing to tag output. Output goes to stderr — stdout is reserved for data pipes. All scripts use `#!/usr/bin/env bash` with `set -euo pipefail`. Prefer `[[ ]]`, arrays, and `${var//pat/rep}` over spawning subprocesses
 
 ## Tests
-`npm test` — `.test.js` files in `tests/`. Vitest + Testcontainers — spins up pg-phoenix-image + MinIO containers programmatically. Tests real PG behavior, WAL-G, backup/restore flows. No Compose files.
+`npm test` — `.test.js` files in `tests/`. Vitest + Testcontainers — spins up pg-phoenix-image + SeaweedFS containers programmatically. Tests real PG behavior, WAL-G, backup/restore flows. No Compose files.
 
 Files are grouped by container topology (not by feature) to minimize container starts. 5 files run in parallel; tests within each file run sequentially (shared container state). Each `describe` block manages its own container lifecycle via `beforeAll`/`afterAll`. See [docs/architecture/testing.md](docs/architecture/testing.md) for the full test plan.
