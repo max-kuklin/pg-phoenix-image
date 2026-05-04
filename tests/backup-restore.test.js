@@ -3,8 +3,9 @@ import { chmod, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { Wait } from 'testcontainers';
+import { GenericContainer, Wait } from 'testcontainers';
 import {
+  IMAGE_NAME,
   OBJECT_STORAGE_BUCKET,
   listObjectStorageObjects,
   objectStoragePgEnv,
@@ -56,6 +57,21 @@ async function waitForObjectStorageObject(topology, prefix, pattern, timeoutMs =
   }
 
   throw new Error(`Object storage entry matching ${pattern} was not found under ${prefix}\n${listing}`);
+}
+
+async function makeMountedPgDataRemovable(pgDataParent) {
+  if (!pgDataParent) {
+    return;
+  }
+
+  const container = await new GenericContainer(IMAGE_NAME)
+    .withBindMounts([{ source: pgDataParent, target: '/var/lib/postgresql', mode: 'rw' }])
+    .withEntrypoint(['bash'])
+    .withCommand(['-lc', 'chmod -R 0777 /var/lib/postgresql'])
+    .withWaitStrategy(Wait.forOneShotStartup())
+    .start();
+
+  await container.stop({ remove: true, removeVolumes: true });
 }
 
 describe('backup with S3-compatible object storage', () => {
@@ -201,8 +217,8 @@ describe('startup restore with S3-compatible object storage', () => {
   });
 
   afterAll(async () => {
-    await target?.exec(['bash', '-lc', 'chmod -R 0777 /var/lib/postgresql || true']).catch(() => {});
     await target?.stop();
+    await makeMountedPgDataRemovable(pgDataDir);
     await source?.stop();
     await topology?.stop();
     if (pgDataDir) {
@@ -268,8 +284,8 @@ describe('startup restore with S3-compatible object storage', () => {
 
       expect(restored.rows).toEqual([{ id: 1, value: 'before target' }]);
     } finally {
-      await pitrTarget?.exec(['bash', '-lc', 'chmod -R 0777 /var/lib/postgresql || true']).catch(() => {});
       await pitrTarget?.stop();
+      await makeMountedPgDataRemovable(pitrDataDir);
       await rm(pitrDataDir, { recursive: true, force: true });
     }
   });

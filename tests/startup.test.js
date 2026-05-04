@@ -194,6 +194,67 @@ describe('startup behavior', () => {
     });
   });
 
+  test('upgrade gate starts old-version PostgreSQL temporarily for backup', async () => {
+    await withPgData(async ({ pgDataParent }) => {
+      const fakeBin = await mkdtemp(path.join(tmpdir(), 'pg-phoenix-bin-'));
+      const fakeWalG = path.join(fakeBin, 'wal-g');
+      await writeFile(
+        fakeWalG,
+        [
+          '#!/usr/bin/env bash',
+          'printf "wal-g:%s:PGHOST=%s:PGPORT=%s\\n" "$*" "${PGHOST:-}" "${PGPORT:-}" >> /var/lib/postgresql/walg.log',
+          'if [[ "$1" == backup-list ]]; then if [[ -f /var/lib/postgresql/backup-pushed ]]; then date -u +"backup_name last_modified\\nbase_1 %Y-%m-%dT%H:%M:%SZ"; fi; exit 0; fi',
+          'if [[ "$1" == backup-push ]]; then touch /var/lib/postgresql/backup-pushed; exit 0; fi',
+          'exit 1'
+        ].join('\n'),
+        'utf8'
+      );
+      await chmod(fakeWalG, 0o755);
+
+      try {
+        await setupPgData(
+          pgDataParent,
+          [
+            'mkdir -p /var/lib/postgresql/18/docker /var/lib/postgresql/.pg-binaries/17/bin',
+            'printf "17\\n" > /var/lib/postgresql/18/docker/PG_VERSION',
+            'for binary in postgres pg_upgrade pg_resetwal pg_dump pg_dumpall; do printf "%s\\n" "#!/usr/bin/env bash" "exit 0" > "/var/lib/postgresql/.pg-binaries/17/bin/$binary"; done',
+            'printf "%s\\n" "#!/usr/bin/env bash" "printf \\"pg_ctl:%s\\\\n\\" \\"\\$*\\" >> /var/lib/postgresql/pg_ctl.log" "exit 0" > /var/lib/postgresql/.pg-binaries/17/bin/pg_ctl',
+            'chmod +x /var/lib/postgresql/.pg-binaries/17/bin/*',
+            'chmod -R 0777 /var/lib/postgresql'
+          ].join(' && ')
+        );
+
+        const result = await runImage(
+          {
+            PG_UPGRADE: 'true',
+            WALG_S3_PREFIX: 's3://bucket/db',
+            PATH: '/tmp/bin:/usr/lib/postgresql/18/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+          },
+          {
+            command: ['postgres', '--help'],
+            bindMounts: [
+              { source: pgDataParent, target: '/var/lib/postgresql', mode: 'rw' },
+              { source: fakeBin, target: '/tmp/bin', mode: 'ro' }
+            ]
+          }
+        );
+
+        const pgCtlLog = await readPgDataFile(pgDataParent, 'pg_ctl.log');
+        const walGLog = await readPgDataFile(pgDataParent, 'walg.log');
+
+        expect(result.code).toBe(1);
+        expect(result.stderr).toContain('[upgrade] ------ starting PostgreSQL 17 for pre-upgrade backup ------');
+        expect(result.stderr).toContain('[upgrade] ------ pushing pre-upgrade backup ------');
+        expect(result.stderr).toContain('[upgrade] upgrade execution is not implemented yet');
+        expect(pgCtlLog).toContain("-p 5433 -c listen_addresses='localhost'");
+        expect(pgCtlLog).toContain('-m fast -w stop');
+        expect(walGLog).toContain('wal-g:backup-push /var/lib/postgresql/18/docker:PGHOST=localhost:PGPORT=5433');
+      } finally {
+        await rm(fakeBin, { recursive: true, force: true });
+      }
+    });
+  });
+
   test('refuses restore over existing PGDATA without overwrite gate', async () => {
     await withPgData(async ({ pgDataParent }) => {
       await setupPgData(
