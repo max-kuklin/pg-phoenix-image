@@ -16,7 +16,7 @@ Born after 5+ years of running PostgreSQL on Kubernetes+Istio with Patroni/Spilo
 - **PostgreSQL 18 image baseline** - shipped config, `pg_stat_statements`, WAL-G, cron, and `conf.d` override support.
 - **Automatic backups** - WAL archiving plus scheduled base backups through WAL-G when a storage prefix is configured.
 - **Startup restore and clone foundation** - restore latest backup or a PITR target during container startup, including request-id idempotency and local rollback staging.
-- **Container-first tests** - Bash contract tests plus Testcontainers coverage for image startup, WAL-G backup, and startup restore against MinIO.
+- **Container-first tests** - Bash contract tests plus container coverage for startup gates, image startup, WAL-G backup, and startup restore against MinIO.
 
 ## Project Structure
 
@@ -50,7 +50,7 @@ See [docs/](docs/) for backup configuration, Kubernetes deployment, PITR procedu
 
 - Major-version upgrade automation (`upgrade.sh` is currently a stub)
 - Renovate digest pinning for the PostgreSQL base image
-- Broader startup, clone, PITR, retention, and failure-mode E2E coverage
+- Broader clone, PITR, retention, and failure-mode E2E coverage
 - Streaming replication / read replicas
 - Automatic failover / manual switchover
 - PgDog connection pooling

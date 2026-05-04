@@ -152,6 +152,8 @@ GCS/Azure: substitute `WALG_GS_PREFIX` / `WALG_AZ_PREFIX` and matching credentia
 
 Backup scenarios run in the shared PG + MinIO container pair (see [testing.md](testing.md)):
 
+Current implemented coverage: WAL-G startup configuration, version-scoped env file, base backup creation, base backup object layout in MinIO, WAL archive object layout after a forced segment switch, retention of full backups, and graceful skip without WAL-G config. The remaining bullets describe target coverage.
+
 - WAL-G configured and cron scheduled on startup
 - `backup.sh` creates a base backup visible in `wal-g backup-list`
 - Insert data → force WAL switch → segment exists in MinIO

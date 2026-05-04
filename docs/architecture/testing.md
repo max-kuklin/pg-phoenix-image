@@ -15,11 +15,12 @@ Script contract tests are intentionally limited. They are not a separate mock-he
 
 | Command | Runs | Use when |
 |---|---|---|
-| `npm test -- tests/contracts` | Script contract tests in Linux | Changing shared Bash validation/quoting/parsing |
+| `npm run test:contracts` | Script contract tests in Linux | Changing shared Bash validation/quoting/parsing |
 | `docker build -t pg-phoenix-image:test .` | Local image build | Before any image or E2E test |
-| `npm test -- tests/pg-only.test.js` | Single-PG image smoke suite | Checking image startup/config/runtime surface |
-| `npm test -- tests/startup.test.js` | Entrypoint scenarios | Changing startup env behavior |
-| `npm test -- tests/backup-restore.test.js` | PG + MinIO backup/restore suite | Working on WAL-G backup or restore |
+| `npm run test:image` | Single-PG image smoke suite | Checking image startup/config/runtime surface |
+| `npm test -- tests/startup.test.js` | Fast entrypoint refusal scenarios | Changing startup env gates |
+| `npm run test:e2e` | Startup gates plus PG + MinIO backup/restore suite | Working on WAL-G backup or restore |
+| `npm run test:report` | Full suite plus timing report with inline duration bars | Comparing test runtime |
 | `npm test` | Full suite | Before merge or release |
 
 Integration tests use the prebuilt `pg-phoenix-image:test` tag by default. Tests should not rebuild the image per file. The upgrade suite is the exception because it intentionally builds old/new PostgreSQL variants from the Dockerfile.

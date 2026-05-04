@@ -21,17 +21,21 @@ trap cleanup EXIT
 mkdir -p "$(dirname "$REPORT_FILE")"
 
 log_phase "running test suite"
+started_at="$(date +%s)"
 set +e
 npm test -- --reporter=json --outputFile="$json_file"
 test_status="$?"
 set -e
+finished_at="$(date +%s)"
+elapsed_seconds="$((finished_at - started_at))"
 
 log_phase "writing report"
-node - "$json_file" "$REPORT_FILE" "$test_status" <<'NODE'
+node - "$json_file" "$REPORT_FILE" "$test_status" "$elapsed_seconds" <<'NODE'
 const fs = require('node:fs');
 
-const [jsonPath, reportPath, statusText] = process.argv.slice(2);
+const [jsonPath, reportPath, statusText, elapsedText] = process.argv.slice(2);
 const statusCode = Number(statusText);
+const elapsedMs = Number(elapsedText) * 1000;
 const report = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
 
 function formatMs(value) {
@@ -48,6 +52,24 @@ function formatMs(value) {
 
 function statusIcon(status) {
   return status === 'passed' ? 'PASS' : 'FAIL';
+}
+
+function escapeTableText(value) {
+  return String(value).replaceAll('|', '\\|');
+}
+
+function progressBar(value, maxValue) {
+  if (!Number.isFinite(value) || value <= 0 || !Number.isFinite(maxValue) || maxValue <= 0) {
+    return '';
+  }
+
+  const percent = Math.max(1, Math.round((value / maxValue) * 100));
+  return `<div style="height:3px;width:100%;background:#e5e7eb"><div style="height:3px;width:${percent}%;background:#2563eb"></div></div>`;
+}
+
+function formatDurationCell(value, maxValue) {
+  const bar = progressBar(value, maxValue);
+  return bar ? `${formatMs(value)}<br>${bar}` : formatMs(value);
 }
 
 const suites = report.testResults ?? [];
@@ -72,6 +94,22 @@ const passed = assertions.filter((test) => test.status === 'passed').length;
 const failed = assertions.filter((test) => test.status === 'failed').length;
 const pending = assertions.length - passed - failed;
 const generatedAt = new Date().toISOString();
+const suiteRows = suites.map((suite) => {
+  const tests = suite.assertionResults ?? [];
+  const duration = Number.isFinite(suite.endTime) && Number.isFinite(suite.startTime)
+    ? suite.endTime - suite.startTime
+    : suite.perfStats?.runtime;
+
+  return {
+    status: suite.status,
+    name: suite.name,
+    duration,
+    tests: tests.length
+  };
+});
+const maxSuiteDuration = Math.max(0, ...suiteRows.map((suite) => suite.duration ?? 0));
+const sortedAssertions = assertions.toSorted((a, b) => (b.duration ?? 0) - (a.duration ?? 0));
+const maxTestDuration = Math.max(0, ...sortedAssertions.map((test) => test.duration ?? 0));
 
 const lines = [
   '# Test Report',
@@ -87,6 +125,7 @@ const lines = [
   `- Passed: ${passed}`,
   `- Failed: ${failed}`,
   `- Pending/other: ${pending}`,
+  `- Wall-clock runtime: ${formatMs(elapsedMs)}`,
   `- Suite runtime total: ${formatMs(totalDuration)}`,
   '',
   '## Test Files',
@@ -95,13 +134,8 @@ const lines = [
   '|---|---|---:|---:|'
 ];
 
-for (const suite of suites) {
-  const tests = suite.assertionResults ?? [];
-  const duration = Number.isFinite(suite.endTime) && Number.isFinite(suite.startTime)
-    ? suite.endTime - suite.startTime
-    : suite.perfStats?.runtime;
-
-  lines.push(`| ${statusIcon(suite.status)} | ${suite.name} | ${formatMs(duration)} | ${tests.length} |`);
+for (const suite of suiteRows) {
+  lines.push(`| ${statusIcon(suite.status)} | ${escapeTableText(suite.name)} | ${formatDurationCell(suite.duration, maxSuiteDuration)} | ${suite.tests} |`);
 }
 
 lines.push(
@@ -112,8 +146,8 @@ lines.push(
   '|---|---:|---|'
 );
 
-for (const test of assertions.toSorted((a, b) => (b.duration ?? 0) - (a.duration ?? 0))) {
-  lines.push(`| ${statusIcon(test.status)} | ${formatMs(test.duration)} | ${test.title.replaceAll('|', '\\|')} |`);
+for (const test of sortedAssertions) {
+  lines.push(`| ${statusIcon(test.status)} | ${formatDurationCell(test.duration, maxTestDuration)} | ${escapeTableText(test.title)} |`);
 }
 
 fs.writeFileSync(reportPath, `${lines.join('\n')}\n`);

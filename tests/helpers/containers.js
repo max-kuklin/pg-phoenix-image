@@ -119,6 +119,30 @@ export async function startMinio() {
   }
 }
 
+export async function runMinioClient(network, command) {
+  const container = await new GenericContainer(MINIO_CLIENT_IMAGE)
+    .withNetwork(network)
+    .withEntrypoint(['sh'])
+    .withCommand([
+      '-c',
+      [
+        `mc alias set local http://minio:9000 ${MINIO_ACCESS_KEY} ${MINIO_SECRET_KEY} >/dev/null`,
+        command
+      ].join(' && ')
+    ])
+    .withWaitStrategy(Wait.forOneShotStartup())
+    .start();
+
+  const logs = await container.logs();
+  const chunks = [];
+
+  for await (const chunk of logs) {
+    chunks.push(Buffer.from(chunk).toString('utf8'));
+  }
+
+  return chunks.join('');
+}
+
 export function minioPgEnv(prefix = `s3://${MINIO_BUCKET}/pg`) {
   return {
     WALG_S3_PREFIX: prefix,

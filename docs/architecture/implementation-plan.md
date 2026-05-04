@@ -4,7 +4,7 @@
 
 ## Current Status
 
-Phases 1 and 2 are implemented. Phase 3 is partially implemented: WAL-G setup, `backup.sh`, startup restore preparation, restore idempotency, rollback markers, and the first MinIO E2E restore path are in place. Phase 4 has partial entrypoint behavior through restore selection, but the dedicated `startup.test.js` and `clone.test.js` suites have not been added yet. Phase 5 is design-only; `upgrade.sh` is still a stub. Phase 6 has a main-branch CI workflow, but Renovate digest pinning is not configured.
+Phases 1 and 2 are implemented. Phase 3 is partially implemented: WAL-G setup, `backup.sh`, startup restore preparation, restore idempotency, rollback markers, and the first MinIO E2E restore path are in place. Phase 4 has partial entrypoint behavior through restore selection and `startup.test.js` coverage for refusal gates; `clone.test.js` has not been added yet. Phase 5 is design-only; `upgrade.sh` is still a stub. Phase 6 has a main-branch CI workflow, but Renovate digest pinning is not configured.
 
 ## Phase 1: Foundation
 

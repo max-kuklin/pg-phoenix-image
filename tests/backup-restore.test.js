@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Wait } from 'testcontainers';
-import { minioPgEnv, startMinio, startPg, startPgWithMinio } from './helpers/containers.js';
+import { MINIO_BUCKET, minioPgEnv, runMinioClient, startMinio, startPg, startPgWithMinio } from './helpers/containers.js';
 
 async function containerLogs(container) {
   const stream = await container.logs({ tail: 200 });
@@ -34,11 +34,32 @@ async function waitForQuery(pgContainer, sql, timeoutMs = 60_000) {
   throw new Error(`PostgreSQL did not become queryable: ${lastError?.message ?? 'unknown'}\n${logs}`);
 }
 
+async function waitForMinioObject(topology, prefix, pattern, timeoutMs = 30_000) {
+  const startedAt = Date.now();
+  let listing = '';
+
+  while (Date.now() - startedAt < timeoutMs) {
+    listing = await runMinioClient(topology.network, `mc find local/${MINIO_BUCKET}/${prefix}`);
+
+    if (pattern.test(listing)) {
+      return listing;
+    }
+
+    await delay(250);
+  }
+
+  throw new Error(`MinIO object matching ${pattern} was not found under ${prefix}\n${listing}`);
+}
+
 describe('backup with MinIO', () => {
   let topology;
 
   beforeAll(async () => {
-    topology = await startPgWithMinio();
+    topology = await startPgWithMinio({
+      env: {
+        BACKUP_RETAIN_FULL: '1'
+      }
+    });
   });
 
   afterAll(async () => {
@@ -73,6 +94,37 @@ describe('backup with MinIO', () => {
     expect(backup.stderr).toContain('[backup] base backup completed');
     expect(list.exitCode).toBe(0);
     expect(list.stdout).toContain('base_');
+  });
+
+  test('stores base backup objects under the version-scoped prefix', async () => {
+    const listing = await waitForMinioObject(topology, 'pg/18', /basebackups_/);
+
+    expect(listing).toContain(`local/${MINIO_BUCKET}/pg/18/`);
+    expect(listing).toContain('basebackups_');
+  });
+
+  test('archives WAL under the version-scoped prefix after segment switch', async () => {
+    await topology.pg.query('CREATE TABLE phase3_wal_check (id int PRIMARY KEY)');
+    await topology.pg.query('INSERT INTO phase3_wal_check VALUES (1)');
+    await topology.pg.query('SELECT pg_switch_wal()');
+
+    const listing = await waitForMinioObject(topology, 'pg/18', /wal_/);
+
+    expect(listing).toContain(`local/${MINIO_BUCKET}/pg/18/`);
+    expect(listing).toContain('wal_');
+  });
+
+  test('retains only the configured number of full backups', async () => {
+    const backup = await topology.pg.exec(['backup.sh'], { user: 'postgres' });
+    const list = await topology.pg.exec(['bash', '-lc', '. /etc/walg-env.sh && wal-g backup-list']);
+    const backups = list.stdout
+      .split('\n')
+      .filter((line) => line.startsWith('base_'));
+
+    expect(backup.exitCode).toBe(0);
+    expect(backup.stderr).toContain('[backup] applying retention policy: keep 1 full backups');
+    expect(list.exitCode).toBe(0);
+    expect(backups).toHaveLength(1);
   });
 });
 

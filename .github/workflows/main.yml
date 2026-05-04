@@ -32,59 +32,13 @@ jobs:
         run: docker pull debian:bookworm-slim
 
       - name: Run contract tests
-        run: npm test -- tests/contracts
+        run: npm run test:contracts
 
       - name: Build image
         run: docker build -t pg-phoenix-image:test .
 
       - name: Run image smoke tests
-        run: npm test -- tests/pg-only.test.js
+        run: npm run test:image
 
       - name: Run backup tests
-        run: npm test -- tests/backup-restore.test.js
-
-      - name: Smoke test image
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          name=pg-phoenix-ci-smoke
-          docker rm -f "$name" >/dev/null 2>&1 || true
-
-          cleanup() {
-            docker rm -f "$name" >/dev/null 2>&1 || true
-          }
-          trap cleanup EXIT
-
-          docker run -d --name "$name" -e POSTGRES_PASSWORD=test pg-phoenix-image:test >/dev/null
-
-          healthy=false
-          for _ in {1..90}; do
-            status="$(docker inspect -f '{{.State.Health.Status}}' "$name")"
-            if [[ "$status" == "healthy" ]]; then
-              healthy=true
-              break
-            fi
-
-            if [[ "$status" == "unhealthy" ]]; then
-              docker logs "$name"
-              exit 1
-            fi
-
-            sleep 1
-          done
-
-          if [[ "$healthy" != "true" ]]; then
-            docker inspect -f '{{.State.Health.Status}}' "$name"
-            docker logs "$name"
-            exit 1
-          fi
-
-          config_file="$(docker exec -e PGPASSWORD=test "$name" \
-            psql -h 127.0.0.1 -U postgres -tAc 'SHOW config_file;')"
-          test "$config_file" = "/etc/postgresql/postgresql.conf"
-
-          docker exec "$name" wal-g --version
-          docker exec "$name" test -x /usr/local/bin/backup.sh
-          docker exec "$name" test -x /usr/local/bin/restore.sh
-          docker exec "$name" test -x /usr/local/bin/upgrade.sh
+        run: npm run test:e2e
