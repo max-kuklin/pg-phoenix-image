@@ -1,9 +1,10 @@
 # pg-phoenix-image Dockerfile
 # -----------------------------------------------
-# postgres:18 (Debian) + precompiled WAL-G + scripts + config
+# postgres:18.3-bookworm + precompiled WAL-G + scripts + config
 
-# Pin base image digest for reproducible builds. Renovate updates this.
-ARG PG_BASE=postgres:18@sha256:78481659c47e862334611ccdaf7c369c986b3046da9857112f3b309114a65fb4
+# Pin base image digest for reproducible builds. Release builds override this
+# from release-tracks.json for each supported PostgreSQL major.
+ARG PG_BASE=postgres:18.3-bookworm@sha256:a8824b3eef0c73d7a494881d625411060f5bf3c87280394cbc84197c6fa4bde5
 FROM ${PG_BASE}
 
 ARG WALG_VERSION=v3.0.8

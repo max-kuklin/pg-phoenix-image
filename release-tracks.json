@@ -1,0 +1,29 @@
+{
+  "tracks": [
+    {
+      "major": "14",
+      "minor": "14.22",
+      "base": "postgres:14.22-bookworm@sha256:05464d899dce6bac18bb6f56e62f02742bba94028ce171a5a70fe7f6e6fdd2e5"
+    },
+    {
+      "major": "15",
+      "minor": "15.17",
+      "base": "postgres:15.17-bookworm@sha256:cdae3e2e298dcebbf57f5ea1e650b18646f6c0d8f4739784852d278847e84346"
+    },
+    {
+      "major": "16",
+      "minor": "16.13",
+      "base": "postgres:16.13-bookworm@sha256:aefb61c5ac3326e56a7b769fa655fe00af0e335c1b9b65182bd6f6233dd12aad"
+    },
+    {
+      "major": "17",
+      "minor": "17.9",
+      "base": "postgres:17.9-bookworm@sha256:0042a9d3d3365f837bd561981a9098518ed529b801fb2f655338d49108a464d5"
+    },
+    {
+      "major": "18",
+      "minor": "18.3",
+      "base": "postgres:18.3-bookworm@sha256:a8824b3eef0c73d7a494881d625411060f5bf3c87280394cbc84197c6fa4bde5"
+    }
+  ]
+}

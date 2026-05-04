@@ -20,49 +20,13 @@ Each supported PostgreSQL major version has its own image track. The initial sup
 
 Major tracks are intentionally separate because PostgreSQL major versions are not binary-compatible on disk. Moving from one track to another is a major upgrade and requires the explicit `PG_UPGRADE=true` flow described in [upgrade-major.md](upgrade-major.md).
 
-Minor PostgreSQL updates stay within the same major track. A new `postgres:18.1-bookworm` base image produces a new `18` image build and a new `18.1` minor tag, but does not require `pg_upgrade`.
+Minor PostgreSQL updates stay within the same major track. A new `postgres:18.3-bookworm` base image produces a new `18` image build and a new `18.3` minor tag, but does not require `pg_upgrade`.
 
 ## Track Manifest
 
-The Dockerfile stays generic and accepts `PG_BASE` as a build argument. Supported PostgreSQL tracks should live in a separate manifest so Renovate and CI can reason about every track without duplicating Dockerfiles.
+The Dockerfile stays generic and accepts `PG_BASE` as a build argument. Supported PostgreSQL tracks live in [release-tracks.json](../../release-tracks.json) so Renovate and CI can reason about every track without duplicating Dockerfiles.
 
-Example target shape:
-
-```json
-{
-  "tracks": [
-    {
-      "major": "14",
-      "minor": "14.19",
-      "base": "postgres:14.19-bookworm@sha256:..."
-    },
-    {
-      "major": "15",
-      "minor": "15.14",
-      "base": "postgres:15.14-bookworm@sha256:..."
-    },
-    {
-      "major": "16",
-      "minor": "16.10",
-      "base": "postgres:16.10-bookworm@sha256:..."
-    },
-    {
-      "major": "17",
-      "minor": "17.6",
-      "base": "postgres:17.6-bookworm@sha256:..."
-    },
-    {
-      "major": "18",
-      "minor": "18.1",
-      "base": "postgres:18.1-bookworm@sha256:..."
-    }
-  ]
-}
-```
-
-The exact minor numbers above are examples; the manifest should contain the current supported upstream tags when it is introduced.
-
-Renovate should track each `base` value in the manifest. That lets it open PRs for both kinds of upstream change:
+Each manifest entry records the PostgreSQL major, the current upstream minor, and the pinned official `postgres:<major>.<minor>-bookworm@sha256:<digest>` base image. Renovate tracks each `base` value in the manifest. That lets it open PRs for both kinds of upstream change:
 
 - same PostgreSQL minor tag, new digest: Debian/security rebuild
 - new PostgreSQL minor tag: PostgreSQL minor release
@@ -76,12 +40,12 @@ Publish immutable tags for audit and rollback, plus moving convenience tags for 
 | Tag | Mutable | Purpose |
 |---|---:|---|
 | `18` | yes | Latest tested image for the PostgreSQL 18 major track |
-| `18.1` | yes | Latest tested image for the PostgreSQL 18.1 minor track |
-| `18.1-v0.4.0` | no | Immutable image for PostgreSQL 18.1 from project release `v0.4.0` |
-| `18.1-v0.4.0-sha-<shortsha>` | no | Optional source trace tag for that released image |
+| `18.3` | yes | Latest tested image for the PostgreSQL 18.3 minor track |
+| `18.3-v0.4.0` | no | Immutable image for PostgreSQL 18.3 from project release `v0.4.0` |
+| `18.3-v0.4.0-sha-<shortsha>` | no | Optional source trace tag for that released image |
 | image digest | no | Deployment pin for strict GitOps environments |
 
-Deployments should prefer immutable tags or digests. Moving tags such as `18` and `18.1` are convenient for development and simple environments, but GitOps production manifests should pin an immutable tag or digest so rollouts are explicit and rollback is deterministic.
+Deployments should prefer immutable tags or digests. Moving tags such as `18` and `18.3` are convenient for development and simple environments, but GitOps production manifests should pin an immutable tag or digest so rollouts are explicit and rollback is deterministic.
 
 Do not publish generic `latest`. It hides the PostgreSQL major version and makes accidental major upgrades easier.
 
@@ -90,22 +54,12 @@ Do not publish generic `latest`. It hides the PostgreSQL major version and makes
 The project package version is not the image version. Image compatibility is primarily determined by:
 
 - PostgreSQL major track (`18`, `19`, ...)
-- PostgreSQL upstream minor version (`18.1`, `18.2`, ...)
+- PostgreSQL upstream minor version (`18.2`, `18.3`, ...)
 - source commit
 - base image digest
 - WAL-G version and checksum
 
-Use plain SemVer project releases to identify a coherent set of images across all supported PostgreSQL tracks. A release such as `v0.4.0` can publish images for PostgreSQL 14 through 18 at the same source commit:
-
-```text
-14.19-v0.4.0
-15.14-v0.4.0
-16.10-v0.4.0
-17.6-v0.4.0
-18.1-v0.4.0
-```
-
-The upstream prefix identifies the PostgreSQL minor version. The project suffix identifies the `pg-phoenix-image` release. The `v` prefix is part of the project release label, so tags read as `<postgres-version>-<project-release>`. If GitHub releases are added, release notes should be keyed by the project release (`v0.4.0`) and list every image tag and digest produced by that release.
+Use plain SemVer project releases to identify a coherent set of images across all supported PostgreSQL tracks. A release such as `v0.4.0` can publish one immutable image tag per supported track, for example `<postgres-minor>-v0.4.0`. The upstream prefix identifies the PostgreSQL minor version. The project suffix identifies the `pg-phoenix-image` release. The `v` prefix is part of the project release label, so tags read as `<postgres-version>-<project-release>`. If GitHub releases are added, release notes should be keyed by the project release (`v0.4.0`) and list every image tag and digest produced by that release.
 
 Use SemVer maturity stages without pre-release suffixes:
 
@@ -204,7 +158,7 @@ Renovate owns detection:
 3. Renovate opens a PR updating the affected manifest entry.
 4. CI builds and tests the affected track. Release CI may build all tracks for simplicity.
 5. If the PR merges, no image is published automatically.
-6. An operator runs the manual release workflow for the affected track, producing a new immutable tag such as `18.1-v0.4.0` and updating moving tags `18.1` and `18`.
+6. An operator runs the manual release workflow for the affected track, producing a new immutable tag such as `18.3-v0.4.0` and updating moving tags `18.3` and `18`.
 7. Operators deploy the new image normally; PostgreSQL restarts on the same PGDATA with no data migration.
 
 PostgreSQL minor updates are allowed to automerge only if the full test suite is required and green. WAL-G version updates must remain manual because they can affect backup and restore compatibility independently from PostgreSQL.

@@ -7,7 +7,19 @@
     {
       "customType": "regex",
       "fileMatch": [
-        "^Dockerfile$"
+        "(^|/)release-tracks\\.json$"
+      ],
+      "matchStrings": [
+        "\"base\"\\s*:\\s*\"postgres:(?<currentValue>[^\"]+?)@(?<currentDigest>sha256:[a-f0-9]+)\""
+      ],
+      "datasourceTemplate": "docker",
+      "depNameTemplate": "postgres",
+      "versioningTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "fileMatch": [
+        "(^|/)Dockerfile$"
       ],
       "matchStrings": [
         "ARG WALG_VERSION=(?<currentValue>v[\\d.]+)"
@@ -24,11 +36,9 @@
       "matchPackageNames": [
         "postgres"
       ],
+      "allowedVersions": "/^{{{major}}}\\./",
       "automerge": true,
-      "automergeType": "pr",
-      "schedule": [
-        "every 6 hours"
-      ]
+      "automergeType": "pr"
     },
     {
       "matchDatasources": [
@@ -37,10 +47,7 @@
       "matchPackageNames": [
         "wal-g/wal-g"
       ],
-      "automerge": false,
-      "schedule": [
-        "every 6 hours"
-      ]
+      "automerge": false
     }
   ]
 }

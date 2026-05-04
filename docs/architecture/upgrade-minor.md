@@ -2,117 +2,72 @@
 
 ## Purpose
 
-Keep PostgreSQL patched (security fixes, bug fixes) with zero operator involvement. Minor upgrades (e.g. 18.1 → 18.2) are binary compatible — no data migration, no `pg_upgrade`. Replace the binary, restart, done.
+Keep supported PostgreSQL major tracks patched with security and bug-fix releases. Minor upgrades, such as `18.2 -> 18.3`, are binary compatible: no data migration and no `pg_upgrade`. Replace the image, restart PostgreSQL on the same PGDATA, and verify.
 
-The challenge isn't the upgrade — it's **knowing when to rebuild**.
+The hard part is not the PostgreSQL restart. It is detecting upstream image changes across every supported major, testing the rebuilt image, and making the release intentional.
 
 ## Concept
 
-The Dockerfile pins the base image by digest:
-
-```dockerfile
-FROM postgres:18@sha256:abc123...
-```
-
-Renovate Bot monitors this digest. When `postgres:18` gets a new build (security patch, minor PG release), Renovate opens a PR updating the pinned digest. CI builds the new image, runs the full test suite, and pushes only if tests pass.
+[release-tracks.json](../../release-tracks.json) pins each supported PostgreSQL base image by minor tag and digest. Renovate monitors every `base` value. When the upstream `postgres:<major>.<minor>-bookworm` tag gets a new digest, or when a newer minor tag exists for that major, Renovate opens a PR updating the manifest. CI builds and tests the affected track; image publication remains a manual release step.
 
 ## Design Decisions
 
 | Decision | Choice | Alternatives | Rationale |
 |---|---|---|---|
-| Delivery mechanism | Rebuild image on base image change | In-place `apk upgrade`, manual tag bumps | Immutable images. No runtime package management. CI guarantees every deployed image is tested. |
-| Base image tracking | Renovate Bot with digest pinning | Dependabot, skopeo cron, Diun, manual monitoring | Renovate is purpose-built for this — tracks digest changes within the same tag, opens PRs, supports automerge. Dependabot only tracks tag version changes, not digest rebuilds. Free for all repos. |
-| Digest pinning | `@sha256:...` in Dockerfile | Floating tag (`postgres:18`) | Pinning makes builds reproducible and makes Renovate's PRs visible (one-line diff). Without pinning, `docker build` silently picks up new base images with no audit trail. |
-| Automerge | Optional — enabled via Renovate config | Manual PR review | Digest-only updates (same PG version, new Debian/security patches) are low risk. Automerge is safe if the test suite is solid. Disable for more conservative workflows. |
+| Delivery mechanism | Rebuild immutable images on base image change | Runtime package upgrades, manual tag checks | Every deployed image is built and tested as a unit. No mutable runtime package state. |
+| Base image tracking | Renovate custom manager over `release-tracks.json` | One Dockerfile per major, manual monitoring | One manifest keeps all supported tracks visible without duplicating Dockerfile logic. |
+| Base tag shape | `postgres:<major>.<minor>-bookworm@sha256:...` | Floating `postgres:<major>`, unpinned digest, distro-less tag | Minor version is visible in our image tags, Debian release is explicit, and digest pinning keeps builds reproducible. |
+| Automerge | Allowed only after required CI passes | Manual review for every digest PR | PostgreSQL base-image updates are low risk when the full image and E2E suites pass. WAL-G remains manual. |
 
-## Implementation
+## Renovate Configuration
 
-### Renovate Configuration
+`renovate.json` has two custom managers:
 
-`renovate.json` in repo root:
+- `release-tracks.json` manager tracks `postgres:<major>.<minor>-bookworm@sha256:...` entries as Docker dependencies.
+- Dockerfile manager tracks `WALG_VERSION` against WAL-G GitHub releases.
 
-```json
-{
-  "extends": [
-    "config:recommended",
-    "docker:pinDigests"
-  ],
-  "customManagers": [
-    {
-      "customType": "regex",
-      "fileMatch": ["^Dockerfile$"],
-      "matchStrings": ["ARG WALG_VERSION=(?<currentValue>v[\\d.]+)"],
-      "datasourceTemplate": "github-releases",
-      "depNameTemplate": "wal-g/wal-g"
-    }
-  ],
-  "packageRules": [
-    {
-      "matchDatasources": ["docker"],
-      "matchPackageNames": ["postgres"],
-      "automerge": true,
-      "automergeType": "pr",
-      "schedule": ["every 6 hours"]
-    },
-    {
-      "matchDatasources": ["github-releases"],
-      "matchPackageNames": ["wal-g/wal-g"],
-      "automerge": false,
-      "schedule": ["every 6 hours"]
-    }
-  ]
-}
-```
+Renovate runs from the repository's scheduled GitHub Actions workflow using a short-lived GitHub App installation token created from `RENOVATE_APP_ID` and `RENOVATE_APP_PRIVATE_KEY` secrets. PostgreSQL base-image PRs are constrained to the current PostgreSQL major for each manifest entry. WAL-G PRs do not automerge because a WAL-G change can affect backup format, restore behavior, or PostgreSQL version support independently from the base image.
 
-What this does:
-- `docker:pinDigests` — ensures `FROM` lines use `@sha256:...` pins
-- `automerge: true` — merges postgres digest PRs automatically after CI passes
-- `customManagers` — extracts `WALG_VERSION` from the Dockerfile `ARG` and tracks it against WAL-G GitHub releases. `WALG_SHA256` must be updated manually when accepting a version bump PR (download the new release binary, verify checksum, update the `ARG`)
-- WAL-G tracked with `automerge: false` — requires manual review since upgrades could change backup format or drop PG version support
+## CI Flow
 
-### CI Build Pipeline
+For a Renovate PR:
 
-Triggered by Renovate's PR merge (or any push to main). See [release.md](release.md) for the full image publishing and tagging model.
+1. Build the affected PostgreSQL track from the manifest entry.
+2. Run image smoke tests for that track.
+3. Run backup/restore E2E for that track.
+4. Run adjacent major upgrade E2E when the changed track participates in a supported upgrade path.
+5. Merge only when required checks pass.
 
-1. Build pg-phoenix-image image from updated Dockerfile
-2. Run full test suite (`npm test`)
-3. If tests pass → push `pg-phoenix-image:18-<date>` + update `pg-phoenix-image:18-latest`
-4. If tests fail → alert, don't push. Operator investigates.
+The initial implementation may build all tracks on every PR for simplicity. It can be optimized later by detecting which manifest entries changed.
 
-### Image Tagging Convention
+## Release Flow
+
+Merging a Renovate PR does not publish an image. An operator creates a project release manually, then runs the image release workflow for the selected tracks. See [release.md](release.md) for the full tagging and publishing model.
+
+Example release tags after a PostgreSQL 18 minor update:
 
 | Tag | Purpose |
 |---|---|
-| `pg-phoenix-image:18-latest` | Always the latest build for PG 18 |
-| `pg-phoenix-image:18-20260213` | Date-stamped for auditability and rollback |
-| `pg-phoenix-image:19-latest` | PG 19 track (when available) |
+| `pg-phoenix-image:18` | Moving latest released PostgreSQL 18 image |
+| `pg-phoenix-image:18.3` | Moving latest released PostgreSQL 18.3 image |
+| `pg-phoenix-image:18.3-v0.4.0` | Immutable PostgreSQL 18.3 image from project release `v0.4.0` |
 
-### Deployment
+## Deployment
 
-Operator or GitOps (ArgoCD, Flux) deploys the new image tag. Pod restarts, PG starts on existing PGDATA — binary compatible, no migration needed.
+Operator or GitOps deploys the new image tag. PostgreSQL restarts on existing PGDATA; no migration is needed within the same major version.
 
-## Security Considerations
-
-| Concern | Mitigation |
-|---|---|
-| Renovate GitHub App has repo access | Open source (20k+ stars), backed by Mend (security company). Only reads Dockerfile, writes one-line PRs. No access to secrets. Self-hosted option available for zero third-party access. |
-| Automerge pushes untested code | Automerge only fires after CI passes. The test suite is the gate — if it's weak, disable automerge and review PRs manually. |
-| Automated rebuilds could push a bad image | Full test suite gates every push. No untested image reaches a registry tag. |
-| Base image introduces a regression | Tests gate the push. If regression is subtle (not caught by tests), operator pins to previous digest until fixed. |
+Production manifests should prefer immutable tags or digests. Moving tags are useful for development and simple environments but make rollback less explicit.
 
 ## Failure Modes
 
 | Failure | Impact | Behavior |
 |---|---|---|
-| Renovate misses an update | Delayed patching | Renovate polling has no SLA but is reliable in practice. Monitor Renovate dashboard for stale dependencies. |
-| CI rebuild fails tests | No new image pushed | Alert sent. Old image continues running. No impact to production. |
-| New base image breaks PG startup | Test suite catches it, image not pushed | Renovate PR stays open (automerge blocked). Operator investigates — may need to wait for upstream fix or pin to previous digest. |
-| Renovate service outage | No PRs created | Temporary. Renovate is self-hostable as a GitHub Action if the hosted app is unreliable. |
+| Renovate misses an update | Delayed patching | Monitor Renovate dashboard for stale dependencies. |
+| CI fails for a base-image PR | No release candidate | PR stays open; old released image remains available. |
+| New base image breaks startup | Test suite should catch it | Hold the Renovate PR or pin to the previous digest until upstream or project code is fixed. |
+| Renovate workflow outage | No PRs created | Fix the scheduled GitHub Actions run or dispatch it manually after the issue is resolved. |
+| Manual release is delayed after merge | Patched image is not published yet | Intentional trade-off: releases are operator-controlled, not automatic on every merge. |
 
 ## Testing
 
-Covered by `tests/pg-only.test.js` (image validation) and `tests/startup.test.js` (binary stash) — see [testing.md](testing.md).
-
-Additional case in `tests/startup.test.js`:
-
-- Binary stash updated after restart with new image (checksum changed) — see [upgrade-major.md](upgrade-major.md) for stash details
+Covered by image smoke tests, backup/restore E2E, startup/binary-stash tests, and adjacent major upgrade tests where relevant. See [testing.md](testing.md) and [release.md](release.md).
