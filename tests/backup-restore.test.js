@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { chmod, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -94,9 +94,11 @@ describe('startup restore with MinIO', () => {
     expect(backup.exitCode).toBe(0);
 
     pgDataDir = await mkdtemp(path.join(tmpdir(), 'pg-phoenix-restore-'));
+    await chmod(pgDataDir, 0o777);
   });
 
   afterAll(async () => {
+    await target?.exec(['bash', '-lc', 'chmod -R 0777 /var/lib/postgresql || true']).catch(() => {});
     await target?.stop();
     await source?.stop();
     await topology?.stop();
