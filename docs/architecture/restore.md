@@ -126,10 +126,8 @@ After restore preparation, the official entrypoint starts PostgreSQL. WAL replay
 
 Restore behavior belongs in E2E tests because correctness depends on PostgreSQL, WAL-G, object storage, and WAL replay.
 
-Current implemented E2E coverage includes startup restore to latest, startup PITR, clone from `PG_RESTORE_FROM` into an empty PVC, completed request ID idempotency on restart, failed fetch preserving existing PGDATA, explicit rollback, and completed rollback request ID idempotency. The remaining target coverage is:
+Current implemented E2E coverage includes startup restore to latest, startup PITR, clone from `PG_RESTORE_FROM` into an empty PVC, completed request ID idempotency on restart, failed fetch preserving existing PGDATA, explicit rollback, completed rollback request ID idempotency, the existing-PGDATA overwrite gate, and the explicit request-id requirement. Bad clone source coverage verifies that WAL-G failures are visible and an empty target PGDATA is not promoted into a partial cluster.
 
-- restore over existing PGDATA requires `PG_RESTORE_OVERWRITE=true`
-- explicit restore and rollback require `PG_RESTORE_REQUEST_ID`
-- restart after clone skips by completed request ID
+The remaining useful expansion is not another happy-path restore case. It is release-readiness coverage around provider-specific object storage errors, restore latency on larger datasets, and operator cleanup after a successful clone or rollback.
 
 Contract tests should remain limited to source prefix validation, argument parsing, and generated restore settings that are hard to diagnose through container logs.

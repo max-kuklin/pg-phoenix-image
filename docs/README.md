@@ -27,3 +27,4 @@ Step-by-step procedures for running the system.
 | [monitoring.md](monitoring.md) | Prometheus exporter sidecar, alerts, Grafana dashboards |
 | [restore-runbook.md](restore-runbook.md) | Disaster recovery, PITR, or cloning from backups |
 | [upgrade-guide.md](upgrade-guide.md) | Minor and major PostgreSQL version upgrades |
+| [production-readiness.md](production-readiness.md) | Release-readiness scenario using real object storage and the operational guides verbatim |

@@ -152,14 +152,6 @@ GCS/Azure: substitute `WALG_GS_PREFIX` / `WALG_AZ_PREFIX` and matching credentia
 
 Backup scenarios run in the shared PG + SeaweedFS S3 container pair (see [testing.md](testing.md)):
 
-Current implemented coverage: WAL-G startup configuration, version-scoped env file, base backup creation, base backup object layout in S3-compatible storage, WAL archive object layout after a forced segment switch, no writes to the flat unversioned prefix, retention of full backups, graceful skip without WAL-G config, latest startup restore, and PITR startup restore. The remaining bullets describe target coverage.
+Current implemented coverage: WAL-G startup configuration, cron scheduling, version-scoped env file, base backup creation visible to `wal-g backup-list`, base backup object layout in S3-compatible storage, WAL archive object layout after a forced segment switch, no writes to the flat unversioned prefix, retention of full backups, graceful skip without WAL-G config, latest startup restore, and PITR startup restore.
 
-- WAL-G configured and cron scheduled on startup
-- `backup.sh` creates a base backup visible in `wal-g backup-list`
-- Insert data → force WAL switch → segment exists in object storage
-- Delta backup created when full already exists
-- Retention removes chains beyond limit
-- No credentials configured → backup skipped gracefully (no crash)
-- `archive_timeout` forces WAL switch during idle
-- Version-prefixed path: set `WALG_S3_PREFIX=s3://bucket/test` → backup lands under `s3://bucket/test/18/`, not `s3://bucket/test/`
-- `wal-g backup-list` operates against the version-scoped prefix (only sees backups for current major version)
+Coverage is intentionally E2E-heavy because WAL-G behavior depends on PostgreSQL, WAL replay, and object storage. The remaining useful expansion is production-shaped durability testing: idle `archive_timeout` behavior without a forced switch, longer retention chains with delta backups, and real-provider IAM/bucket-policy failures that SeaweedFS cannot model.

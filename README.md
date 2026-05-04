@@ -9,15 +9,24 @@ Custom PostgreSQL Docker image based on postgres:18 (Debian), built to rise agai
 Born after 5+ years of running PostgreSQL on Kubernetes+Istio with Patroni/Spilo and a desire for simpler, more reliable operations.
 
 > [!CAUTION]
-> This is a work in progress. Not in usable state yet.
+> Experimental project. Run the production-readiness plan before relying on it for durable data.
 
 ## Implemented Features
 
 - **PostgreSQL 18 image baseline** - shipped config, `pg_stat_statements`, WAL-G, cron, and `conf.d` override support.
 - **Automatic backups** - WAL archiving plus scheduled base backups through WAL-G when a storage prefix is configured.
-- **Startup restore and clone foundation** - restore latest backup or a PITR target during container startup, including request-id idempotency and local rollback staging.
-- **Major-version upgrade foundation** - explicit `PG_UPGRADE` gate, stashed old PostgreSQL binaries, mandatory WAL-G backup verification, in-place `pg_upgrade --link`, rollback cleanup, and post-upgrade backup.
-- **Container-first tests** - Bash contract tests plus container coverage for startup gates, image startup, WAL-G backup, and startup restore against SeaweedFS S3.
+- **Startup restore and clone** - restore latest backup or a PITR target during container startup, including request-id idempotency and local rollback staging.
+- **Major-version upgrade** - explicit `PG_UPGRADE` gate, stashed old PostgreSQL binaries, mandatory WAL-G backup verification, in-place `pg_upgrade --link`, rollback cleanup, and post-upgrade backup.
+
+## Supported Status
+
+The implemented single-primary workflows are covered by Bash contract tests plus container tests against SeaweedFS S3. This is still experimental until [docs/production-readiness.md](docs/production-readiness.md) has been executed against the target object store and Kubernetes environment.
+
+## Planned Features
+
+- Streaming replication / read replicas
+- Automatic failover / manual switchover
+- PgDog connection pooling
 
 ## Project Structure
 
@@ -46,12 +55,6 @@ npm test
 ```
 
 See [docs/](docs/) for backup configuration, Kubernetes deployment, PITR procedures, and upgrade design notes.
-
-## Planned Features
-
-- Streaming replication / read replicas
-- Automatic failover / manual switchover
-- PgDog connection pooling
 
 ## License
 
