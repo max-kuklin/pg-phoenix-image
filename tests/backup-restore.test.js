@@ -153,6 +153,7 @@ describe('startup restore with MinIO', () => {
   let source;
   let target;
   let pgDataDir;
+  let pitrTargetTime;
 
   beforeAll(async () => {
     topology = await startMinio();
@@ -165,8 +166,18 @@ describe('startup restore with MinIO', () => {
     await source.query('CREATE TABLE restore_e2e_check (id int PRIMARY KEY, value text)');
     await source.query("INSERT INTO restore_e2e_check VALUES (1, 'from backup')");
 
+    await source.query('CREATE TABLE restore_pitr_check (id int PRIMARY KEY, value text)');
+    await source.query("INSERT INTO restore_pitr_check VALUES (1, 'before target')");
+
     const backup = await source.exec(['backup.sh'], { user: 'postgres' });
     expect(backup.exitCode).toBe(0);
+
+    const targetTime = await source.query("SELECT to_char(clock_timestamp(), 'YYYY-MM-DD HH24:MI:SS.US TZ') AS value");
+    pitrTargetTime = targetTime.rows[0].value;
+    await delay(1000);
+    await source.query("INSERT INTO restore_pitr_check VALUES (2, 'after target')");
+    const switchWal = await source.query('SELECT pg_switch_wal()');
+    expect(switchWal.rows).toHaveLength(1);
 
     pgDataDir = await mkdtemp(path.join(tmpdir(), 'pg-phoenix-restore-'));
     await chmod(pgDataDir, 0o777);
@@ -215,5 +226,34 @@ describe('startup restore with MinIO', () => {
 
     const afterRestart = await waitForQuery(target, 'SELECT value FROM restore_e2e_check WHERE id = 1');
     expect(afterRestart.rows[0].value).toBe('from backup');
+  });
+
+  test('restores to a point in time before later source writes', async () => {
+    const pitrDataDir = await mkdtemp(path.join(tmpdir(), 'pg-phoenix-pitr-'));
+    let pitrTarget;
+    await chmod(pitrDataDir, 0o777);
+
+    try {
+      pitrTarget = await startPg({
+        network: topology.network,
+        networkAliases: ['restore-pitr-target'],
+        bindMounts: [{ source: pitrDataDir, target: '/var/lib/postgresql', mode: 'rw' }],
+        waitStrategy: Wait.forLogMessage(/restore prepared for PostgreSQL startup/),
+        env: {
+          ...minioPgEnv('s3://pg-phoenix-test/restore-pitr-target'),
+          PG_RESTORE_FROM: 's3://pg-phoenix-test/restore-source/18',
+          PG_RESTORE_TARGET_TIME: pitrTargetTime,
+          PG_RESTORE_REQUEST_ID: 'restore-e2e-pitr'
+        }
+      });
+
+      const restored = await waitForQuery(pitrTarget, 'SELECT id, value FROM restore_pitr_check ORDER BY id');
+
+      expect(restored.rows).toEqual([{ id: 1, value: 'before target' }]);
+    } finally {
+      await pitrTarget?.exec(['bash', '-lc', 'chmod -R 0777 /var/lib/postgresql || true']).catch(() => {});
+      await pitrTarget?.stop();
+      await rm(pitrDataDir, { recursive: true, force: true });
+    }
   });
 });

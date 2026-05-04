@@ -1,5 +1,6 @@
 import { GenericContainer, Network, Wait } from 'testcontainers';
 import pg from 'pg';
+import { setTimeout as delay } from 'node:timers/promises';
 
 export const IMAGE_NAME = process.env.PG_PHOENIX_IMAGE || 'pg-phoenix-image:test';
 export const POSTGRES_PASSWORD = 'test';
@@ -90,7 +91,7 @@ export async function startMinio() {
       .withWaitStrategy(Wait.forHttp('/minio/health/ready', 9000).forStatusCode(200))
       .start();
 
-    await new GenericContainer(MINIO_CLIENT_IMAGE)
+    const minioClient = await new GenericContainer(MINIO_CLIENT_IMAGE)
       .withNetwork(network)
       .withEntrypoint(['sh'])
       .withCommand([
@@ -102,6 +103,7 @@ export async function startMinio() {
       ])
       .withWaitStrategy(Wait.forOneShotStartup())
       .start();
+    await minioClient.stop();
 
     return {
       minio,
@@ -109,14 +111,30 @@ export async function startMinio() {
       bucket: MINIO_BUCKET,
       stop: async () => {
         await minio?.stop();
-        await network.stop();
+        await stopNetwork(network);
       }
     };
   } catch (error) {
     await minio?.stop();
-    await network.stop();
+    await stopNetwork(network);
     throw error;
   }
+}
+
+async function stopNetwork(network) {
+  let lastError;
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await network.stop();
+      return;
+    } catch (error) {
+      lastError = error;
+      await delay(250);
+    }
+  }
+
+  throw lastError;
 }
 
 export async function runMinioClient(network, command) {
@@ -133,14 +151,18 @@ export async function runMinioClient(network, command) {
     .withWaitStrategy(Wait.forOneShotStartup())
     .start();
 
-  const logs = await container.logs();
-  const chunks = [];
+  try {
+    const logs = await container.logs();
+    const chunks = [];
 
-  for await (const chunk of logs) {
-    chunks.push(Buffer.from(chunk).toString('utf8'));
+    for await (const chunk of logs) {
+      chunks.push(Buffer.from(chunk).toString('utf8'));
+    }
+
+    return chunks.join('');
+  } finally {
+    await container.stop();
   }
-
-  return chunks.join('');
 }
 
 export function minioPgEnv(prefix = `s3://${MINIO_BUCKET}/pg`) {

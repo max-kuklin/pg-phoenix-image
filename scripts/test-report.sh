@@ -63,13 +63,14 @@ function progressBar(value, maxValue) {
     return '';
   }
 
-  const percent = Math.max(1, Math.round((value / maxValue) * 100));
-  return `<div style="height:3px;width:100%;background:#e5e7eb"><div style="height:3px;width:${percent}%;background:#2563eb"></div></div>`;
+  const barWidth = 20;
+  const filledWidth = Math.max(1, Math.round((value / maxValue) * barWidth));
+  return `[${'#'.repeat(filledWidth)}${'-'.repeat(barWidth - filledWidth)}]`;
 }
 
 function formatDurationCell(value, maxValue) {
   const bar = progressBar(value, maxValue);
-  return bar ? `${formatMs(value)}<br>${bar}` : formatMs(value);
+  return bar ? `${formatMs(value)} \`${bar}\`` : formatMs(value);
 }
 
 const suites = report.testResults ?? [];
