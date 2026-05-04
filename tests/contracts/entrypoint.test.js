@@ -4,10 +4,10 @@ import { createBashRunner } from '../helpers/shell.js';
 const mockRuntime = [
   'mkdir -p /tmp/bin /tmp/etc-postgresql/conf.d',
   'printf "%s\\n" "#!/usr/bin/env bash" "printf \\"postgres (PostgreSQL) 18.0\\\\n\\"" > /tmp/bin/postgres',
-  'for binary in pg_upgrade pg_ctl pg_resetwal pg_dump pg_dumpall; do printf "%s\\n" "#!/usr/bin/env bash" "exit 0" > "/tmp/bin/$binary"; done',
+  'for binary in pg_upgrade pg_ctl pg_controldata pg_resetwal pg_dump pg_dumpall; do printf "%s\\n" "#!/usr/bin/env bash" "exit 0" > "/tmp/bin/$binary"; done',
   'printf "%s\\n" "#!/usr/bin/env bash" "printf \\"entrypoint:%s\\\\n\\" \\"\\$*\\"" > /tmp/bin/docker-entrypoint.sh',
   'printf "%s\\n" "#!/usr/bin/env bash" "exit 0" > /tmp/bin/chown',
-  'chmod +x /tmp/bin/postgres /tmp/bin/pg_upgrade /tmp/bin/pg_ctl /tmp/bin/pg_resetwal /tmp/bin/pg_dump /tmp/bin/pg_dumpall /tmp/bin/docker-entrypoint.sh /tmp/bin/chown',
+  'chmod +x /tmp/bin/postgres /tmp/bin/pg_upgrade /tmp/bin/pg_ctl /tmp/bin/pg_controldata /tmp/bin/pg_resetwal /tmp/bin/pg_dump /tmp/bin/pg_dumpall /tmp/bin/docker-entrypoint.sh /tmp/bin/chown',
   'export PATH=/tmp/bin:$PATH',
   'export PGDATA=/tmp/pg/18/docker',
   'export PG_BINARY_STASH_ROOT=/tmp/pg-binaries',

@@ -29,7 +29,7 @@ Before deploying the new image with `PG_UPGRADE=true`:
 
 | Decision | Choice | Alternatives | Rationale |
 |---|---|---|---|
-| Binary stash location | `/var/lib/postgresql/.pg-binaries/<major>/bin/` | Inside PGDATA, download from `apk` at upgrade time, fat image with N and N-1, init container | On the PVC but outside PGDATA. No network dependency. No fat image. No extra container. ~15MB per major version. Outside PGDATA means the stash runs unconditionally on every boot (including first) — no initdb hook needed. Survives `backup-fetch` (which replaces PGDATA). Reachable by both old and new PG versions during a major upgrade (`pg_upgrade` creates a new data directory adjacent to PGDATA, stash path is unaffected). |
+| Binary stash location | `/var/lib/postgresql/.pg-binaries/<major>/` | Inside PGDATA, download packages at upgrade time, fat image with N and N-1, init container | On the PVC but outside PGDATA. The stash includes `bin/`, versioned `lib/`, and matching share files because old PostgreSQL binaries are not self-contained. No network dependency. No fat image. No extra container. Outside PGDATA means the stash runs unconditionally on every boot (including first) — no initdb hook needed. Survives `backup-fetch` (which replaces PGDATA). Reachable by both old and new PG versions during a major upgrade (`pg_upgrade` creates a new data directory adjacent to PGDATA, stash path is unaffected). |
 | Binary stash timing | Every startup (idempotent) | Only when version changes | Simple — always current. If Debian patches a point release binary between restarts, the stash stays fresh. Skip if already matches (checksum). |
 | Upgrade trigger | `PG_UPGRADE=true` env var | Auto-detect and upgrade, CLI flag | Explicit gate. Auto-upgrade on version mismatch is dangerous — operator must opt in. Without the gate, version mismatch → container refuses to start with clear error. |
 | pg_upgrade mode | `--link` (hard links) | `--copy`, `--clone` (reflink) | `--link` is instant regardless of data size. Requires old and new data directories on the same filesystem (satisfied by default — `$PGDATA.new` is adjacent to `$PGDATA` on the same PVC). `--clone` requires a reflink-capable filesystem (not EBS/ext4). `--copy` doubles disk and time. |
@@ -46,9 +46,9 @@ Before deploying the new image with `PG_UPGRADE=true`:
 On every startup, before PG is started:
 
 1. Read current PG major version from `postgres --version`
-2. Compute checksum of key binaries (`postgres`, `pg_upgrade`, `pg_ctl`, `pg_resetwal`, `pg_dump`, `pg_dumpall`)
+2. Compute checksum of key binaries plus versioned PostgreSQL `lib/` and share files
 3. Compare to `/var/lib/postgresql/.pg-binaries/<major>/checksum`
-4. If missing or different → copy binaries from `/usr/local/bin/` to stash, write checksum
+4. If missing or different → copy binaries, `lib/`, and share files to stash, write checksum
 5. If match → skip
 
 The stash lives at `/var/lib/postgresql/.pg-binaries/` — on the PVC but outside PGDATA. This is deliberate: PGDATA must be empty for `initdb` on first boot, and the stash path must be version-independent so both old and new PG versions can find it during an upgrade. The stash is a sibling of PGDATA on the same PVC, unaffected by `pg_upgrade`'s temporary data directories.
@@ -64,6 +64,8 @@ Stash structure:
     │   ├── pg_resetwal
     │   ├── pg_dump
     │   └── pg_dumpall
+    ├── lib/
+    ├── share/
     └── checksum
 ```
 

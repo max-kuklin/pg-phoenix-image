@@ -2,11 +2,16 @@ import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { createBashRunner } from '../helpers/shell.js';
 
 const mockRuntime = [
-  'mkdir -p /tmp/bin /tmp/pg/18/docker /tmp/pg-binaries/17/bin',
+  'mkdir -p /tmp/bin /tmp/pg/18/docker /tmp/pg-binaries/17/bin /tmp/pg-binaries/17/lib /tmp/pg-binaries/17/share',
   'printf "17\\n" > /tmp/pg/18/docker/PG_VERSION',
-  'for binary in postgres pg_upgrade pg_resetwal pg_dump pg_dumpall; do printf "%s\\n" "#!/usr/bin/env bash" "exit 0" > "/tmp/pg-binaries/17/bin/$binary"; done',
+  'for binary in postgres pg_upgrade pg_controldata pg_resetwal pg_dump pg_dumpall; do printf "%s\\n" "#!/usr/bin/env bash" "exit 0" > "/tmp/pg-binaries/17/bin/$binary"; done',
   'printf "%s\\n" "#!/usr/bin/env bash" "printf \\"pg_ctl:%s\\\\n\\" \\"\\$*\\" >> /tmp/pg_ctl.log" "exit 0" > /tmp/pg-binaries/17/bin/pg_ctl',
+  'printf "%s\\n" "#!/usr/bin/env bash" "exit 0" > /tmp/bin/postgres',
+  'printf "%s\\n" "#!/usr/bin/env bash" "while [[ \\"\\$#\\" -gt 0 ]]; do if [[ \\"\\$1\\" == -D ]]; then shift; mkdir -p \\"\\$1\\"; printf \\"18\\\\n\\" > \\"\\$1/PG_VERSION\\"; fi; shift || true; done" > /tmp/bin/initdb',
+  'printf "%s\\n" "#!/usr/bin/env bash" "printf \\"pg_upgrade:%s\\\\n\\" \\"\\$*\\" >> /tmp/pg_upgrade.log" "exit 0" > /tmp/bin/pg_upgrade',
+  'printf "%s\\n" "#!/usr/bin/env bash" "printf \\"new_pg_ctl:%s\\\\n\\" \\"\\$*\\" >> /tmp/pg_ctl.log" "exit 0" > /tmp/bin/pg_ctl',
   'chmod +x /tmp/pg-binaries/17/bin/*',
+  'chmod +x /tmp/bin/postgres /tmp/bin/initdb /tmp/bin/pg_upgrade /tmp/bin/pg_ctl',
   'export PATH=/tmp/bin:$PATH',
   'export PG_OLD_MAJOR=17',
   'export PG_NEW_MAJOR=18',
@@ -55,10 +60,11 @@ describe('upgrade script contracts', () => {
 
     expect(result.code).toBe(1);
     expect(result.stderr).toContain('[upgrade] recent pre-upgrade backup found for PostgreSQL 17');
-    expect(result.stderr).toContain('[upgrade] upgrade execution is not implemented yet');
+    expect(result.stderr).toContain('[upgrade] ------ initializing PostgreSQL 18 data directory ------');
     expect(result.stdout).toContain("pg_ctl:-D /tmp/pg/18/docker -o -p 5433 -c listen_addresses='localhost' -c config_file=/etc/postgresql/postgresql.conf -w start");
     expect(result.stdout).toContain('pg_ctl:-D /tmp/pg/18/docker -m fast -w stop');
-    expect(result.stdout).toContain("export WALG_S3_PREFIX='s3://bucket/db/17'");
+    expect(result.stdout).toContain("export WALG_S3_PREFIX='s3://bucket/db/18'");
+    expect(result.stdout).toContain('new_pg_ctl:-D /tmp/pg/18/docker -m fast -w stop');
   });
 
   test('pushes backup when latest backup is missing', async () => {
@@ -73,9 +79,11 @@ describe('upgrade script contracts', () => {
       'exit "$code"'
     ].join('; '));
 
-    expect(result.code).toBe(1);
+    expect(result.code).toBe(0);
     expect(result.stderr).toContain('[upgrade] ------ pushing pre-upgrade backup ------');
     expect(result.stderr).toContain('[upgrade] pre-upgrade backup verified for PostgreSQL 17');
+    expect(result.stderr).toContain('[upgrade] ------ initializing PostgreSQL 18 data directory ------');
+    expect(result.stderr).toContain('[upgrade] major upgrade completed; remove PG_UPGRADE=true before the next rollout');
     expect(result.stdout).toContain('wal-g:backup-push /tmp/pg/18/docker:PGHOST=localhost:PGPORT=5433');
   });
 

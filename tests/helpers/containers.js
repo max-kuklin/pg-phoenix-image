@@ -17,10 +17,33 @@ export async function startPg(overrides = {}) {
     ...overrides.env
   };
 
-  let builder = new GenericContainer(IMAGE_NAME)
+  let builder = new GenericContainer(overrides.imageName ?? IMAGE_NAME)
     .withEnvironment(env)
-    .withExposedPorts(5432)
     .withWaitStrategy(overrides.waitStrategy ?? Wait.forHealthCheck());
+
+  if (overrides.containerName) {
+    builder = builder.withName(overrides.containerName);
+  }
+
+  if (overrides.autoRemove !== undefined) {
+    builder = builder.withAutoRemove(overrides.autoRemove);
+  }
+
+  if (overrides.startupTimeoutMs) {
+    builder = builder.withStartupTimeout(overrides.startupTimeoutMs);
+  }
+
+  if (overrides.exposedPorts ?? true) {
+    builder = builder.withExposedPorts(5432);
+  }
+
+  if (overrides.entrypoint) {
+    builder = builder.withEntrypoint(overrides.entrypoint);
+  }
+
+  if (overrides.command) {
+    builder = builder.withCommand(overrides.command);
+  }
 
   if (overrides.bindMounts) {
     builder = builder.withBindMounts(overrides.bindMounts);
@@ -37,7 +60,7 @@ export async function startPg(overrides = {}) {
   const container = await builder.start();
 
   const host = container.getHost();
-  const port = container.getMappedPort(5432);
+  const port = (overrides.exposedPorts ?? true) ? container.getMappedPort(5432) : undefined;
 
   return {
     container,

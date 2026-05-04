@@ -8,6 +8,7 @@
     "test:contracts": "vitest run tests/contracts",
     "test:image": "vitest run tests/pg-only.test.js",
     "test:e2e": "vitest run tests/startup.test.js tests/backup-restore.test.js",
+    "test:upgrade": "vitest run tests/upgrade.test.js",
     "test:report": "node -e \"const { spawnSync } = require('node:child_process'); const candidates = ['bash', 'C:\\\\Program Files\\\\Git\\\\bin\\\\bash.exe']; const bash = candidates.find((candidate) => spawnSync(candidate, ['--version'], { stdio: 'ignore' }).status === 0); if (!bash) { console.error('No working Bash found. Install Git Bash or run scripts/test-report.sh on Linux.'); process.exit(1); } const result = spawnSync(bash, ['scripts/test-report.sh'], { stdio: 'inherit' }); process.exit(result.status ?? 1);\""
   },
   "devDependencies": {

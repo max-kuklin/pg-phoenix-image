@@ -8,7 +8,7 @@ LOG_COMPONENT=entrypoint
 PG_MAJOR="$(postgres -V | awk '{print $3}' | cut -d. -f1)"
 PGDATA="${PGDATA:-/var/lib/postgresql/$PG_MAJOR/docker}"
 PG_BINARY_STASH_ROOT="${PG_BINARY_STASH_ROOT:-/var/lib/postgresql/.pg-binaries}"
-PG_STASH_BINARIES=(postgres pg_upgrade pg_ctl pg_resetwal pg_dump pg_dumpall)
+PG_STASH_BINARIES=(postgres pg_upgrade pg_ctl pg_controldata pg_resetwal pg_dump pg_dumpall)
 
 validate_non_negative_int() {
   [[ "$1" =~ ^[0-9]+$ ]]
@@ -119,10 +119,20 @@ binary_path() {
 
 stash_checksum() {
   local binary
+  local pg_root
 
   for binary in "${PG_STASH_BINARIES[@]}"; do
     binary_path "$binary"
   done | sort | xargs sha256sum
+
+  pg_root="$(dirname "$(dirname "$(binary_path postgres)")")"
+  if [[ -d "$pg_root/lib" ]]; then
+    find "$pg_root/lib" -type f -print0 | sort -z | xargs -0 sha256sum
+  fi
+
+  if [[ -d "/usr/share/postgresql/$PG_MAJOR" ]]; then
+    find "/usr/share/postgresql/$PG_MAJOR" -type f -print0 | sort -z | xargs -0 sha256sum
+  fi
 }
 
 stash_pg_binaries() {
@@ -131,6 +141,7 @@ stash_pg_binaries() {
   local temp="$target.tmp.$$"
   local checksum
   local binary
+  local pg_root
 
   checksum="$(stash_checksum)"
 
@@ -145,6 +156,16 @@ stash_pg_binaries() {
   for binary in "${PG_STASH_BINARIES[@]}"; do
     cp "$(binary_path "$binary")" "$temp/bin/$binary"
   done
+
+  pg_root="$(dirname "$(dirname "$(binary_path postgres)")")"
+  if [[ -d "$pg_root/lib" ]]; then
+    cp -a "$pg_root/lib" "$temp/lib"
+  fi
+
+  if [[ -d "/usr/share/postgresql/$PG_MAJOR" ]]; then
+    mkdir -p "$temp/share"
+    cp -a "/usr/share/postgresql/$PG_MAJOR/." "$temp/share/"
+  fi
 
   printf '%s' "$checksum" > "$temp/checksum"
   chown -R postgres:postgres "$temp"

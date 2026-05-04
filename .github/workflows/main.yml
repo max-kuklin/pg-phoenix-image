@@ -45,3 +45,6 @@ jobs:
 
       - name: Run backup tests
         run: npm run test:e2e
+
+      - name: Run upgrade tests
+        run: npm run test:upgrade

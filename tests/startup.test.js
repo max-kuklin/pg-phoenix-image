@@ -28,7 +28,7 @@ async function runImage(env = {}, options = {}) {
 
   try {
     const result = await execFileAsync('docker', args, {
-      timeout: options.timeoutMs ?? 20_000,
+      timeout: options.timeoutMs ?? 60_000,
       maxBuffer: 1024 * 1024
     });
 
@@ -215,9 +215,9 @@ describe('startup behavior', () => {
         await setupPgData(
           pgDataParent,
           [
-            'mkdir -p /var/lib/postgresql/18/docker /var/lib/postgresql/.pg-binaries/17/bin',
+            'mkdir -p /var/lib/postgresql/18/docker /var/lib/postgresql/.pg-binaries/17/bin /var/lib/postgresql/.pg-binaries/17/lib /var/lib/postgresql/.pg-binaries/17/share',
             'printf "17\\n" > /var/lib/postgresql/18/docker/PG_VERSION',
-            'for binary in postgres pg_upgrade pg_resetwal pg_dump pg_dumpall; do printf "%s\\n" "#!/usr/bin/env bash" "exit 0" > "/var/lib/postgresql/.pg-binaries/17/bin/$binary"; done',
+            'for binary in postgres pg_upgrade pg_controldata pg_resetwal pg_dump pg_dumpall; do printf "%s\\n" "#!/usr/bin/env bash" "exit 0" > "/var/lib/postgresql/.pg-binaries/17/bin/$binary"; done',
             'printf "%s\\n" "#!/usr/bin/env bash" "printf \\"pg_ctl:%s\\\\n\\" \\"\\$*\\" >> /var/lib/postgresql/pg_ctl.log" "exit 0" > /var/lib/postgresql/.pg-binaries/17/bin/pg_ctl',
             'chmod +x /var/lib/postgresql/.pg-binaries/17/bin/*',
             'chmod -R 0777 /var/lib/postgresql'
@@ -245,7 +245,8 @@ describe('startup behavior', () => {
         expect(result.code).toBe(1);
         expect(result.stderr).toContain('[upgrade] ------ starting PostgreSQL 17 for pre-upgrade backup ------');
         expect(result.stderr).toContain('[upgrade] ------ pushing pre-upgrade backup ------');
-        expect(result.stderr).toContain('[upgrade] upgrade execution is not implemented yet');
+        expect(result.stderr).toContain('[upgrade] ------ initializing PostgreSQL 18 data directory ------');
+        expect(result.stderr).toContain('[upgrade] ------ checking PostgreSQL major upgrade ------');
         expect(pgCtlLog).toContain("-p 5433 -c listen_addresses='localhost'");
         expect(pgCtlLog).toContain('-m fast -w stop');
         expect(walGLog).toContain('wal-g:backup-push /var/lib/postgresql/18/docker:PGHOST=localhost:PGPORT=5433');
