@@ -72,7 +72,7 @@ What this does:
 
 ### CI Build Pipeline
 
-Triggered by Renovate's PR merge (or any push to main):
+Triggered by Renovate's PR merge (or any push to main). See [release.md](release.md) for the full image publishing and tagging model.
 
 1. Build pg-phoenix-image image from updated Dockerfile
 2. Run full test suite (`npm test`)

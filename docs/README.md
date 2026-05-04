@@ -7,6 +7,7 @@ How and why each feature works. Read these to understand design decisions, trade
 | Doc | Covers |
 |---|---|
 | [image.md](architecture/image.md) | Docker image build, base image choice, WAL-G installation |
+| [release.md](architecture/release.md) | Image tags, CI/CD publishing, registry strategy, minor upgrade release flow |
 | [entrypoint.md](architecture/entrypoint.md) | Startup orchestration — version check, restore selection, backup setup, handoff |
 | [backup.md](architecture/backup.md) | WAL archiving, base backups, delta chains, version-prefixed S3 paths |
 | [restore.md](architecture/restore.md) | Startup restore, PITR, clone, and explicit local rollback |
