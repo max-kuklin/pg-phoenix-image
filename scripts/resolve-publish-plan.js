@@ -40,9 +40,9 @@ export function releaseTags(track, releaseTag, releaseSha) {
       `${track.minor}-${releaseTag}-sha-${shortSha}`
     ],
     moving: [
-      `${track.major}-${releaseTag}`,
       track.major,
-      track.minor
+      track.minor,
+      `${track.major}-${releaseTag}`
     ]
   };
 }

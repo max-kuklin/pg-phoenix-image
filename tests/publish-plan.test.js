@@ -54,9 +54,9 @@ describe('publish plan', () => {
       '17.9-v0.4.0-sha-1234567890ab'
     ]);
     expect(releaseTags(tracks[1], 'v0.4.0', '1234567890abcdef').moving).toEqual([
-      '17-v0.4.0',
       '17',
-      '17.9'
+      '17.9',
+      '17-v0.4.0'
     ]);
   });
 
