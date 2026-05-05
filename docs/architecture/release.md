@@ -55,13 +55,22 @@ The `17-v0.4.0` tag is the important harness-pinned channel: users can stay on t
 
 ## Publish Events
 
-There are two publishing paths.
+Image publishing uses one reusable workflow plus event-specific callers:
+
+| Workflow | Role |
+|---|---|
+| `publish-images.yml` | Reusable build/test/push implementation |
+| `release.yml` | Creates project releases and directly calls image publishing |
+| `publish-project-release.yml` | Publishes images for releases created outside the `Release` workflow |
+| `publish-postgres-refresh.yml` | Publishes changed tracks after `release-tracks.json` reaches `main` |
+
+The direct call from `release.yml` is required because GitHub does not trigger follow-on workflows for release events created with `GITHUB_TOKEN`.
 
 ### Project Release
 
 Triggered by a published GitHub release such as `v0.4.0`.
 
-The workflow builds every selected PostgreSQL track from the release tag source, tests the exact local images, pushes immutable tags first, then updates moving tags. A normal project release should publish all supported tracks unless an operator intentionally selects a subset.
+The reusable publisher builds every selected PostgreSQL track from the release tag source, tests the exact local images, pushes immutable tags first, then updates moving tags. A normal project release publishes all supported tracks unless an operator intentionally selects a subset.
 
 The same publisher can be dispatched manually for repair or dry-run validation. Manual inputs select the project release tag, track list, whether moving tags should update, and whether pushes should be skipped.
 

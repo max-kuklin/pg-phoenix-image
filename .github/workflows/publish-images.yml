@@ -1,19 +1,49 @@
 name: Publish Images
 
 on:
-  release:
-    types:
-      - published
-  push:
-    branches:
-      - main
-    paths:
-      - release-tracks.json
+  workflow_call:
+    inputs:
+      release_tag:
+        description: Existing project release tag to publish from
+        required: true
+        type: string
+      track_ref:
+        description: Ref containing the release-tracks.json manifest to publish
+        required: true
+        type: string
+      previous_tracks_ref:
+        description: Optional ref containing the previous release-tracks.json manifest
+        required: false
+        default: ""
+        type: string
+      tracks:
+        description: Comma-separated PostgreSQL majors, or all
+        required: false
+        default: all
+        type: string
+      publish_moving_tags:
+        description: Update moving tags after immutable tags are published
+        required: false
+        default: true
+        type: boolean
+      dry_run:
+        description: Build and test without pushing
+        required: false
+        default: false
+        type: boolean
   workflow_dispatch:
     inputs:
       release_tag:
         description: Existing project release tag to publish from
         required: true
+      track_ref:
+        description: Ref containing release-tracks.json
+        required: true
+        default: main
+      previous_tracks_ref:
+        description: Optional previous ref for changed-track publishing
+        required: false
+        default: ""
       tracks:
         description: Comma-separated PostgreSQL majors, or all
         required: true
@@ -54,32 +84,17 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6.0.2
         with:
+          ref: ${{ inputs.track_ref }}
           fetch-depth: 0
 
       - name: Resolve project release
         id: release
         env:
-          GH_TOKEN: ${{ github.token }}
-          EVENT_NAME: ${{ github.event_name }}
           RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
-          RELEASE_TAG_EVENT: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
 
-          if [[ "$EVENT_NAME" == "release" ]]; then
-            tag="$RELEASE_TAG_EVENT"
-          elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
-            tag="$RELEASE_TAG_INPUT"
-          else
-            tag="$(gh release list --exclude-drafts --exclude-pre-releases --limit 30 --json tagName --jq 'map(select(.tagName | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")))[0].tagName // empty')"
-          fi
-
-          if [[ -z "$tag" ]]; then
-            echo "No non-draft, non-prerelease project release exists; skipping publish." >> "$GITHUB_STEP_SUMMARY"
-            echo "tag=" >> "$GITHUB_OUTPUT"
-            echo "sha=" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          tag="$RELEASE_TAG_INPUT"
 
           if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Project release tag must match vMAJOR.MINOR.PATCH: $tag" >&2
@@ -93,50 +108,25 @@ jobs:
             echo "sha=$sha"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Guard PostgreSQL refresh scope
-        id: guard
-        if: github.event_name == 'push'
+      - name: Read previous track manifest
+        if: inputs.previous_tracks_ref != ''
         env:
-          BEFORE: ${{ github.event.before }}
-          AFTER: ${{ github.sha }}
+          PREVIOUS_TRACKS_REF: ${{ inputs.previous_tracks_ref }}
         run: |
           set -euo pipefail
 
-          changed="$(git diff --name-only "$BEFORE" "$AFTER")"
-
-          if [[ "$changed" != "release-tracks.json" ]]; then
-            {
-              echo "PostgreSQL refresh publishing skipped because the push changed files other than release-tracks.json."
-              echo
-              echo '```text'
-              echo "$changed"
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-          else
-            git show "$BEFORE:release-tracks.json" > previous-release-tracks.json
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-          fi
+          git show "$PREVIOUS_TRACKS_REF:release-tracks.json" > previous-release-tracks.json
 
       - name: Resolve image matrix
         id: plan
         if: steps.release.outputs.tag != ''
         env:
-          EVENT_NAME: ${{ github.event_name }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
           RELEASE_SHA: ${{ steps.release.outputs.sha }}
           TRACKS: ${{ inputs.tracks || 'all' }}
-          GUARD_PUBLISH: ${{ steps.guard.outputs.publish }}
+          PREVIOUS_TRACKS_REF: ${{ inputs.previous_tracks_ref }}
         run: |
           set -euo pipefail
-
-          if [[ "$EVENT_NAME" == "push" && "$GUARD_PUBLISH" != "true" ]]; then
-            echo "should_publish=false" >> "$GITHUB_OUTPUT"
-            echo "images=[]" >> "$GITHUB_OUTPUT"
-            echo "upgrade_pairs=[]" >> "$GITHUB_OUTPUT"
-            echo "moving_tags=[]" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
 
           args=(
             --tracks-file release-tracks.json
@@ -145,7 +135,7 @@ jobs:
             --tracks "$TRACKS"
           )
 
-          if [[ "$EVENT_NAME" == "push" ]]; then
+          if [[ -n "$PREVIOUS_TRACKS_REF" ]]; then
             args+=(--previous-tracks-file previous-release-tracks.json)
           fi
 
@@ -192,14 +182,12 @@ jobs:
           path: harness
 
       - name: Check out current track manifest
-        if: github.event_name == 'push'
         uses: actions/checkout@v6.0.2
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.track_ref }}
           path: track-source
 
       - name: Overlay current track manifest
-        if: github.event_name == 'push'
         run: cp track-source/release-tracks.json harness/release-tracks.json
 
       - name: Set up Node.js
@@ -297,14 +285,12 @@ jobs:
           path: harness
 
       - name: Check out current track manifest
-        if: github.event_name == 'push'
         uses: actions/checkout@v6.0.2
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.track_ref }}
           path: track-source
 
       - name: Overlay current track manifest
-        if: github.event_name == 'push'
         run: cp track-source/release-tracks.json harness/release-tracks.json
 
       - name: Set up Node.js

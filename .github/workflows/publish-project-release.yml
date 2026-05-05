@@ -1,0 +1,24 @@
+name: Publish Project Release Images
+
+on:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: Publish project release images
+    uses: ./.github/workflows/publish-images.yml
+    with:
+      release_tag: ${{ github.event.release.tag_name }}
+      track_ref: ${{ github.event.release.tag_name }}
+      tracks: all
+      publish_moving_tags: true
+      dry_run: false
+    permissions:
+      contents: read
+      packages: write

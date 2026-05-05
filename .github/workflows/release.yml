@@ -20,6 +20,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 concurrency:
   group: release
@@ -29,6 +30,9 @@ jobs:
   release:
     name: Create GitHub release
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      dry_run: ${{ inputs.dry_run }}
 
     steps:
       - name: Check out repository
@@ -130,3 +134,18 @@ jobs:
             echo "- Next tag: ${{ steps.version.outputs.tag }}"
             echo "- Dry run: ${{ inputs.dry_run }}"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: Publish release images
+    needs: release
+    if: needs.release.outputs.dry_run != 'true'
+    uses: ./.github/workflows/publish-images.yml
+    with:
+      release_tag: ${{ needs.release.outputs.tag }}
+      track_ref: ${{ needs.release.outputs.tag }}
+      tracks: all
+      publish_moving_tags: true
+      dry_run: false
+    permissions:
+      contents: read
+      packages: write
