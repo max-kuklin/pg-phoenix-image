@@ -461,54 +461,40 @@ jobs:
           owner="${GITHUB_REPOSITORY_OWNER}"
           package="${GITHUB_REPOSITORY#*/}-staging"
 
-          package_api() {
-            local path="$1"
+          delete_package() {
+            local owner_type="$1"
+            local package_path="/$owner_type/$owner/packages/container/$package"
 
-            if gh api -H "Accept: application/vnd.github+json" "/users/$owner/packages/container/$package/$path" >/tmp/package-api.out 2>/tmp/package-api.err; then
-              printf '/users/%s/packages/container/%s/%s\n' "$owner" "$package" "$path"
+            if gh api --method DELETE -H "Accept: application/vnd.github+json" "$package_path" >/tmp/package-delete.out 2>/tmp/package-delete.err; then
+              echo "Deleted staging package $package"
               return 0
             fi
 
-            if gh api -H "Accept: application/vnd.github+json" "/orgs/$owner/packages/container/$package/$path" >/tmp/package-api.out 2>/tmp/package-api.err; then
-              printf '/orgs/%s/packages/container/%s/%s\n' "$owner" "$package" "$path"
-              return 0
+            if grep -q "Not Found" /tmp/package-delete.err; then
+              return 1
             fi
 
-            cat /tmp/package-api.err >&2
-            return 1
+            cat /tmp/package-delete.err >&2
+            return 2
           }
 
-          delete_staging_tag() {
-            local tag="$1"
-            local versions_path
-            local version_id
-
-            versions_path="$(package_api versions)"
-            version_id="$(
-              gh api \
-                -H "Accept: application/vnd.github+json" \
-                "$versions_path" \
-                --paginate \
-                --jq ".[] | select(.metadata.container.tags[]? == \"$tag\") | .id" \
-                | head -n 1
-            )"
-
-            if [[ -z "$version_id" ]]; then
-              echo "No staging package version found for $tag"
+          delete_staging_package() {
+            if delete_package users; then
               return 0
             fi
 
-            echo "Deleting staging package for $tag"
-            gh api \
-              --method DELETE \
-              -H "Accept: application/vnd.github+json" \
-              "${versions_path%/versions}"
+            if delete_package orgs; then
+              return 0
+            fi
+
+            echo "No staging package found for $package"
           }
 
-          jq -c '.[]' <<< "$IMAGES" | while read -r image; do
-            major="$(jq -r '.major' <<< "$image")"
-            delete_staging_tag "ci-$RELEASE_TAG-$major-${{ github.run_id }}-${{ github.run_attempt }}"
-          done
+          if jq -e 'length == 0' <<< "$IMAGES" >/dev/null; then
+            echo "No images were staged"
+          else
+            delete_staging_package
+          fi
 
   summary:
     name: Publish summary
