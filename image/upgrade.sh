@@ -292,15 +292,18 @@ prepare_new_pgdata() {
   old_bin="$(old_bin_dir)"
   checksum_version="$("$old_bin/pg_controldata" "$PGDATA" | awk -F: '/Data page checksum version/ { gsub(/^[ \t]+/, "", $2); print $2 }')"
 
-  if [[ "$checksum_version" != "0" ]]; then
-    checksum_args+=(--data-checksums)
-  fi
-
   rm -rf "$new_pgdata"
   mkdir -p "$new_pgdata"
   chown_postgres_if_available "$new_pgdata"
 
   log_phase "initializing PostgreSQL $PG_NEW_MAJOR data directory"
+
+  if [[ "$checksum_version" == "0" ]] && "$bin_dir/initdb" --help 2>&1 | grep -q -- '--no-data-checksums'; then
+    checksum_args+=(--no-data-checksums)
+  elif [[ "$checksum_version" != "0" ]]; then
+    checksum_args+=(--data-checksums)
+  fi
+
   as_postgres "$bin_dir/initdb" "${checksum_args[@]}" -D "$new_pgdata"
 }
 
