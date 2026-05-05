@@ -9,6 +9,18 @@ FROM ${PG_BASE}
 
 ARG WALG_VERSION=v3.0.8
 ARG WALG_SHA256=8a0ca72ff3aa10d5a288cdb3e5b2a2e7bc6f8b4ffcf7b3046d718cfeee99a7e7
+ARG IMAGE_SOURCE
+ARG IMAGE_VERSION
+ARG IMAGE_REVISION
+ARG PG_TRACK_MAJOR
+ARG PG_TRACK_MINOR
+
+LABEL org.opencontainers.image.source="${IMAGE_SOURCE}" \
+      org.opencontainers.image.version="${IMAGE_VERSION}" \
+      org.opencontainers.image.revision="${IMAGE_REVISION}" \
+      org.pg-phoenix.postgres.base="${PG_BASE}" \
+      org.pg-phoenix.postgres.major="${PG_TRACK_MAJOR}" \
+      org.pg-phoenix.postgres.minor="${PG_TRACK_MINOR}"
 
 # Runtime dependency (cron) + precompiled WAL-G binary
 RUN set -eux; \

@@ -1,0 +1,413 @@
+name: Publish Images
+
+on:
+  release:
+    types:
+      - published
+  push:
+    branches:
+      - main
+    paths:
+      - release-tracks.json
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing project release tag to publish from
+        required: true
+      tracks:
+        description: Comma-separated PostgreSQL majors, or all
+        required: true
+        default: all
+      publish_moving_tags:
+        description: Update moving tags after immutable tags are published
+        required: true
+        default: true
+        type: boolean
+      dry_run:
+        description: Build and test without pushing
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-images
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Resolve publish plan
+    runs-on: ubuntu-latest
+
+    outputs:
+      should_publish: ${{ steps.plan.outputs.should_publish }}
+      release_tag: ${{ steps.release.outputs.tag }}
+      release_sha: ${{ steps.release.outputs.sha }}
+      images: ${{ steps.plan.outputs.images }}
+      upgrade_pairs: ${{ steps.plan.outputs.upgrade_pairs }}
+      moving_tags: ${{ steps.plan.outputs.moving_tags }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Resolve project release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
+          RELEASE_TAG_EVENT: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$EVENT_NAME" == "release" ]]; then
+            tag="$RELEASE_TAG_EVENT"
+          elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            tag="$RELEASE_TAG_INPUT"
+          else
+            tag="$(gh release list --exclude-drafts --exclude-pre-releases --limit 30 --json tagName --jq 'map(select(.tagName | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")))[0].tagName // empty')"
+          fi
+
+          if [[ -z "$tag" ]]; then
+            echo "No non-draft, non-prerelease project release exists; skipping publish." >> "$GITHUB_STEP_SUMMARY"
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            echo "sha=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Project release tag must match vMAJOR.MINOR.PATCH: $tag" >&2
+            exit 1
+          fi
+
+          sha="$(git rev-list -n 1 "$tag")"
+
+          {
+            echo "tag=$tag"
+            echo "sha=$sha"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Guard PostgreSQL refresh scope
+        id: guard
+        if: github.event_name == 'push'
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          changed="$(git diff --name-only "$BEFORE" "$AFTER")"
+
+          if [[ "$changed" != "release-tracks.json" ]]; then
+            {
+              echo "PostgreSQL refresh publishing skipped because the push changed files other than release-tracks.json."
+              echo
+              echo '```text'
+              echo "$changed"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            git show "$BEFORE:release-tracks.json" > previous-release-tracks.json
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Resolve image matrix
+        id: plan
+        if: steps.release.outputs.tag != ''
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+          TRACKS: ${{ inputs.tracks || 'all' }}
+          GUARD_PUBLISH: ${{ steps.guard.outputs.publish }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$EVENT_NAME" == "push" && "$GUARD_PUBLISH" != "true" ]]; then
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "images=[]" >> "$GITHUB_OUTPUT"
+            echo "upgrade_pairs=[]" >> "$GITHUB_OUTPUT"
+            echo "moving_tags=[]" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          args=(
+            --tracks-file release-tracks.json
+            --release-tag "$RELEASE_TAG"
+            --release-sha "$RELEASE_SHA"
+            --tracks "$TRACKS"
+          )
+
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            args+=(--previous-tracks-file previous-release-tracks.json)
+          fi
+
+          plan="$(node scripts/resolve-publish-plan.js "${args[@]}")"
+          images="$(jq -c '.images' <<< "$plan")"
+          upgrade_pairs="$(jq -c '.upgradePairs' <<< "$plan")"
+          moving_tags="$(jq -c '[.images[] | {major, minor, immutable: .tags.immutable, moving: .tags.moving}]' <<< "$plan")"
+
+          if [[ "$images" == "[]" ]]; then
+            echo "No PostgreSQL tracks selected for publishing." >> "$GITHUB_STEP_SUMMARY"
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "images=$images" >> "$GITHUB_OUTPUT"
+          echo "upgrade_pairs=$upgrade_pairs" >> "$GITHUB_OUTPUT"
+          echo "moving_tags=$moving_tags" >> "$GITHUB_OUTPUT"
+
+  build-test-push-immutable:
+    name: Build, test, publish immutable (${{ matrix.major }})
+    needs: plan
+    if: needs.plan.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.images) }}
+
+    env:
+      REGISTRY_IMAGE: ghcr.io/${{ github.repository }}
+      LOCAL_IMAGE: pg-phoenix-image:publish-${{ matrix.major }}
+      RELEASE_TAG: ${{ needs.plan.outputs.release_tag }}
+      RELEASE_SHA: ${{ needs.plan.outputs.release_sha }}
+      DRY_RUN: ${{ inputs.dry_run || false }}
+
+    steps:
+      - name: Check out project release
+        uses: actions/checkout@v6.0.2
+        with:
+          ref: ${{ needs.plan.outputs.release_tag }}
+          path: harness
+
+      - name: Check out current track manifest
+        if: github.event_name == 'push'
+        uses: actions/checkout@v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          path: track-source
+
+      - name: Overlay current track manifest
+        if: github.event_name == 'push'
+        run: cp track-source/release-tracks.json harness/release-tracks.json
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6.4.0
+        with:
+          node-version: "25"
+          cache: npm
+          cache-dependency-path: harness/package-lock.json
+
+      - name: Install dependencies
+        working-directory: harness
+        run: npm ci
+
+      - name: Pull Bash contract image
+        run: docker pull debian:bookworm-slim
+
+      - name: Build image
+        working-directory: harness
+        run: |
+          set -euo pipefail
+
+          docker build \
+            --build-arg "PG_BASE=${{ matrix.base }}" \
+            --build-arg "IMAGE_SOURCE=${{ github.server_url }}/${{ github.repository }}" \
+            --build-arg "IMAGE_VERSION=$RELEASE_TAG" \
+            --build-arg "IMAGE_REVISION=$RELEASE_SHA" \
+            --build-arg "PG_TRACK_MAJOR=${{ matrix.major }}" \
+            --build-arg "PG_TRACK_MINOR=${{ matrix.minor }}" \
+            -t "$LOCAL_IMAGE" \
+            .
+
+      - name: Run contract tests
+        working-directory: harness
+        run: npm run test:contracts
+
+      - name: Run image smoke tests
+        working-directory: harness
+        env:
+          PG_PHOENIX_IMAGE: ${{ env.LOCAL_IMAGE }}
+        run: npm run test:image
+
+      - name: Run backup tests
+        working-directory: harness
+        env:
+          PG_PHOENIX_IMAGE: ${{ env.LOCAL_IMAGE }}
+        run: npm run test:e2e
+
+      - name: Log in to GitHub Container Registry
+        if: env.DRY_RUN != 'true'
+        uses: docker/login-action@v3.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Push immutable tags
+        if: env.DRY_RUN != 'true'
+        env:
+          IMMUTABLE_TAGS: ${{ toJson(matrix.tags.immutable) }}
+        run: |
+          set -euo pipefail
+
+          jq -r '.[]' <<< "$IMMUTABLE_TAGS" | while read -r tag; do
+            if docker manifest inspect "$REGISTRY_IMAGE:$tag" >/dev/null 2>&1; then
+              echo "Immutable tag already exists: $REGISTRY_IMAGE:$tag" >&2
+              exit 1
+            fi
+
+            docker tag "$LOCAL_IMAGE" "$REGISTRY_IMAGE:$tag"
+            docker push "$REGISTRY_IMAGE:$tag"
+          done
+
+  upgrade-tests:
+    name: Upgrade test (${{ matrix.oldMajor }} -> ${{ matrix.newMajor }})
+    needs: plan
+    if: needs.plan.outputs.should_publish == 'true' && needs.plan.outputs.upgrade_pairs != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.upgrade_pairs) }}
+
+    env:
+      NEW_IMAGE: pg-phoenix-image:upgrade-new-${{ matrix.newMajor }}
+      RELEASE_TAG: ${{ needs.plan.outputs.release_tag }}
+      RELEASE_SHA: ${{ needs.plan.outputs.release_sha }}
+
+    steps:
+      - name: Check out project release
+        uses: actions/checkout@v6.0.2
+        with:
+          ref: ${{ needs.plan.outputs.release_tag }}
+          path: harness
+
+      - name: Check out current track manifest
+        if: github.event_name == 'push'
+        uses: actions/checkout@v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          path: track-source
+
+      - name: Overlay current track manifest
+        if: github.event_name == 'push'
+        run: cp track-source/release-tracks.json harness/release-tracks.json
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6.4.0
+        with:
+          node-version: "25"
+          cache: npm
+          cache-dependency-path: harness/package-lock.json
+
+      - name: Install dependencies
+        working-directory: harness
+        run: npm ci
+
+      - name: Build new major image
+        working-directory: harness
+        run: |
+          set -euo pipefail
+
+          base="$(jq -r --arg major "${{ matrix.newMajor }}" '.tracks[] | select(.major == $major) | .base' release-tracks.json)"
+          minor="$(jq -r --arg major "${{ matrix.newMajor }}" '.tracks[] | select(.major == $major) | .minor' release-tracks.json)"
+
+          if [[ -z "$base" || -z "$minor" ]]; then
+            echo "No release track found for PostgreSQL ${{ matrix.newMajor }}" >&2
+            exit 1
+          fi
+
+          docker build \
+            --build-arg "PG_BASE=$base" \
+            --build-arg "IMAGE_SOURCE=${{ github.server_url }}/${{ github.repository }}" \
+            --build-arg "IMAGE_VERSION=$RELEASE_TAG" \
+            --build-arg "IMAGE_REVISION=$RELEASE_SHA" \
+            --build-arg "PG_TRACK_MAJOR=${{ matrix.newMajor }}" \
+            --build-arg "PG_TRACK_MINOR=$minor" \
+            -t "$NEW_IMAGE" \
+            .
+
+      - name: Run adjacent upgrade tests
+        working-directory: harness
+        env:
+          PG_TEST_OLD: ${{ matrix.oldMajor }}
+          PG_TEST_NEW: ${{ matrix.newMajor }}
+          PG_PHOENIX_NEW_IMAGE: ${{ env.NEW_IMAGE }}
+        run: npm run test:upgrade
+
+  publish-moving:
+    name: Publish moving tags
+    needs:
+      - plan
+      - build-test-push-immutable
+      - upgrade-tests
+    if: always() && needs.plan.outputs.should_publish == 'true' && needs.build-test-push-immutable.result == 'success' && (needs.upgrade-tests.result == 'success' || needs.upgrade-tests.result == 'skipped') && (inputs.publish_moving_tags || github.event_name != 'workflow_dispatch') && !inputs.dry_run
+    runs-on: ubuntu-latest
+
+    env:
+      REGISTRY_IMAGE: ghcr.io/${{ github.repository }}
+      MOVING_TAGS: ${{ needs.plan.outputs.moving_tags }}
+
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Update moving tags from immutable tags
+        run: |
+          set -euo pipefail
+
+          jq -c '.[]' <<< "$MOVING_TAGS" | while read -r image; do
+            source_tag="$(jq -r '.immutable[0]' <<< "$image")"
+
+            jq -r '.moving[]' <<< "$image" | while read -r moving_tag; do
+              docker buildx imagetools create \
+                --tag "$REGISTRY_IMAGE:$moving_tag" \
+                "$REGISTRY_IMAGE:$source_tag"
+            done
+          done
+
+  summary:
+    name: Publish summary
+    needs:
+      - plan
+      - build-test-push-immutable
+      - upgrade-tests
+      - publish-moving
+    if: always() && needs.plan.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Write summary
+        env:
+          RELEASE_TAG: ${{ needs.plan.outputs.release_tag }}
+          IMAGES: ${{ needs.plan.outputs.moving_tags }}
+          DRY_RUN: ${{ inputs.dry_run || false }}
+        run: |
+          {
+            echo "## Image publish"
+            echo
+            echo "- Project release: $RELEASE_TAG"
+            echo "- Dry run: $DRY_RUN"
+            echo
+            echo "| Track | Immutable source | Moving tags |"
+            echo "|---|---|---|"
+            jq -r '.[] | "| `\(.major)` | `\(.immutable[0])` | `\(.moving | join("`, `"))` |"' <<< "$IMAGES"
+          } >> "$GITHUB_STEP_SUMMARY"
