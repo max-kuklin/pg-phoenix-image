@@ -498,11 +498,11 @@ jobs:
               return 0
             fi
 
-            echo "Deleting staging package version $version_id for $tag"
+            echo "Deleting staging package for $tag"
             gh api \
               --method DELETE \
               -H "Accept: application/vnd.github+json" \
-              "${versions_path%/versions}/versions/$version_id"
+              "${versions_path%/versions}"
           }
 
           jq -c '.[]' <<< "$IMAGES" | while read -r image; do
