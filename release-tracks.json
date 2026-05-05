@@ -19,6 +19,11 @@
       "major": "17",
       "minor": "17.9",
       "base": "postgres:17.9-bookworm@sha256:0042a9d3d3365f837bd561981a9098518ed529b801fb2f655338d49108a464d5"
+    },
+    {
+      "major": "18",
+      "minor": "18.3",
+      "base": "postgres:18.3-bookworm@sha256:a8824b3eef0c73d7a494881d625411060f5bf3c87280394cbc84197c6fa4bde5"
     }
   ]
 }
