@@ -70,7 +70,7 @@ The direct call from `release.yml` is required because GitHub does not trigger f
 
 Triggered by a published GitHub release such as `v0.4.0`.
 
-The reusable publisher builds every selected PostgreSQL track from the release tag source and tests the exact local images. Passing image jobs push only run-scoped tags to the staging package. After every selected image and required adjacent upgrade test passes, one promotion job tags each staged image into the public package with its immutable and moving tags. If the run fails before promotion, cleanup removes the staging package versions and no public release tags are left behind.
+The reusable publisher builds every selected PostgreSQL track from the release tag source and tests the exact local images. Passing image jobs push only run-scoped `ci-*` candidate tags to the public package. After every selected image and required adjacent upgrade test passes, one promotion job pulls each candidate image and pushes its immutable and moving release tags with normal Docker tagging. If the run fails before promotion, cleanup removes candidate-only package versions and no public release tags are left behind.
 
 The same publisher can be dispatched manually for repair or dry-run validation. Manual inputs select the project release tag, track list, whether moving tags should update, and whether pushes should be skipped.
 
@@ -119,7 +119,7 @@ Do not claim support for skipped major upgrades such as `14 -> 18` unless they a
 - The publish workflow must test the exact local image before pushing it.
 - The publish workflow must not rebuild after tests.
 - Public immutable and moving tags must be promoted only after every selected image and required upgrade test passes.
-- Failed publish runs must leave at most run-scoped staging tags, which cleanup removes.
+- Failed publish runs must leave at most run-scoped candidate tags, which cleanup removes when no public tags were attached.
 - A selected publish set should update moving tags only after every selected track passes.
 - Every pushed digest must be written to the workflow summary.
 - PostgreSQL refresh publishing must use release-tag harness files plus current `release-tracks.json`.

@@ -169,7 +169,6 @@ jobs:
 
     env:
       REGISTRY_IMAGE: ghcr.io/${{ github.repository }}
-      STAGING_IMAGE: ghcr.io/${{ github.repository }}-staging
       LOCAL_IMAGE: pg-phoenix-image:publish-${{ matrix.major }}
       STAGING_TAG: ci-${{ needs.plan.outputs.release_tag }}-${{ matrix.major }}-${{ github.run_id }}-${{ github.run_attempt }}
       RELEASE_TAG: ${{ needs.plan.outputs.release_tag }}
@@ -246,13 +245,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      - name: Push staging tag
+      - name: Push candidate tag
         if: env.DRY_RUN != 'true'
         run: |
           set -euo pipefail
 
-          docker tag "$LOCAL_IMAGE" "$STAGING_IMAGE:$STAGING_TAG"
-          docker push "$STAGING_IMAGE:$STAGING_TAG"
+          docker tag "$LOCAL_IMAGE" "$REGISTRY_IMAGE:$STAGING_TAG"
+          docker push "$REGISTRY_IMAGE:$STAGING_TAG"
 
   upgrade-tests:
     name: Upgrade test (${{ matrix.oldMajor }} -> ${{ matrix.newMajor }})
@@ -342,7 +341,6 @@ jobs:
 
     env:
       REGISTRY_IMAGE: ghcr.io/${{ github.repository }}
-      STAGING_IMAGE: ghcr.io/${{ github.repository }}-staging
       IMAGES: ${{ needs.plan.outputs.images }}
       RELEASE_TAG: ${{ needs.plan.outputs.release_tag }}
       RELEASE_SHA: ${{ needs.plan.outputs.release_sha }}
@@ -356,25 +354,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      - name: Promote staging tags
+      - name: Promote candidate tags
         run: |
           set -euo pipefail
 
-          image_digest() {
-            docker buildx imagetools inspect "$1" --format '{{ json .Manifest }}' | jq -r '.digest'
-          }
-
           verify_existing_image() {
             local image="$1"
-            local source="$2"
-            local expected_base="$3"
-            local expected_major="$4"
-            local expected_minor="$5"
+            local expected_base="$2"
+            local expected_major="$3"
+            local expected_minor="$4"
             local labels
-
-            if [[ "$(image_digest "$image")" == "$(image_digest "$source")" ]]; then
-              return 0
-            fi
 
             labels="$(docker buildx imagetools inspect "$image" --format '{{ json .Image.Config.Labels }}')"
 
@@ -395,13 +384,12 @@ jobs:
 
           add_new_immutable_tag() {
             local target="$1"
-            local source="$2"
-            local expected_base="$3"
-            local expected_major="$4"
-            local expected_minor="$5"
+            local expected_base="$2"
+            local expected_major="$3"
+            local expected_minor="$4"
 
             if docker manifest inspect "$REGISTRY_IMAGE:$target" >/dev/null 2>&1; then
-              if verify_existing_image "$REGISTRY_IMAGE:$target" "$source" "$expected_base" "$expected_major" "$expected_minor"; then
+              if verify_existing_image "$REGISTRY_IMAGE:$target" "$expected_base" "$expected_major" "$expected_minor"; then
                 echo "Tag already exists with matching metadata: $REGISTRY_IMAGE:$target"
                 return 0
               fi
@@ -410,7 +398,7 @@ jobs:
               exit 1
             fi
 
-            public_tags+=(--tag "$REGISTRY_IMAGE:$target")
+            public_tags+=("$target")
           }
 
           jq -c '.[]' <<< "$IMAGES" | while read -r image; do
@@ -418,28 +406,31 @@ jobs:
             minor="$(jq -r '.minor' <<< "$image")"
             base="$(jq -r '.base' <<< "$image")"
             staging_tag="ci-$RELEASE_TAG-$major-${{ github.run_id }}-${{ github.run_attempt }}"
-            source="$STAGING_IMAGE:$staging_tag"
+            source="$REGISTRY_IMAGE:$staging_tag"
             public_tags=()
+
+            docker pull "$source"
 
             mapfile -t immutable_tags < <(jq -r '.tags.immutable[]' <<< "$image")
             for immutable_tag in "${immutable_tags[@]}"; do
-              add_new_immutable_tag "$immutable_tag" "$source" "$base" "$major" "$minor"
+              add_new_immutable_tag "$immutable_tag" "$base" "$major" "$minor"
             done
 
             if [[ "$PUBLISH_MOVING_TAGS" == "true" ]]; then
               mapfile -t moving_tags < <(jq -r '.tags.moving[]' <<< "$image")
               for moving_tag in "${moving_tags[@]}"; do
-                public_tags+=(--tag "$REGISTRY_IMAGE:$moving_tag")
+                public_tags+=("$moving_tag")
               done
             fi
 
-            if [[ "${#public_tags[@]}" -gt 0 ]]; then
-              docker buildx imagetools create "${public_tags[@]}" "$source"
-            fi
+            for public_tag in "${public_tags[@]}"; do
+              docker tag "$source" "$REGISTRY_IMAGE:$public_tag"
+              docker push "$REGISTRY_IMAGE:$public_tag"
+            done
           done
 
   cleanup-staging:
-    name: Cleanup staging tags
+    name: Cleanup candidate tags
     needs:
       - plan
       - build-test-stage
@@ -454,47 +445,65 @@ jobs:
       GH_TOKEN: ${{ github.token }}
 
     steps:
-      - name: Delete staging package versions
+      - name: Delete unpromoted candidate versions
         run: |
           set -euo pipefail
 
           owner="${GITHUB_REPOSITORY_OWNER}"
-          package="${GITHUB_REPOSITORY#*/}-staging"
+          package="${GITHUB_REPOSITORY#*/}"
 
-          delete_package() {
+          package_api() {
             local owner_type="$1"
-            local package_path="/$owner_type/$owner/packages/container/$package"
+            local path="/$owner_type/$owner/packages/container/$package/versions"
 
-            if gh api --method DELETE -H "Accept: application/vnd.github+json" "$package_path" >/tmp/package-delete.out 2>/tmp/package-delete.err; then
-              echo "Deleted staging package $package"
+            if gh api -H "Accept: application/vnd.github+json" "$path" >/tmp/package-api.out 2>/tmp/package-api.err; then
+              printf '%s\n' "$path"
               return 0
             fi
 
-            if grep -q "Not Found" /tmp/package-delete.err; then
+            if grep -q "Not Found" /tmp/package-api.err; then
               return 1
             fi
 
-            cat /tmp/package-delete.err >&2
+            cat /tmp/package-api.err >&2
             return 2
           }
 
-          delete_staging_package() {
-            if delete_package users; then
+          versions_path="$(package_api users || package_api orgs || true)"
+          if [[ -z "$versions_path" ]]; then
+            echo "No package found for $package"
+            exit 0
+          fi
+
+          delete_candidate_version() {
+            local tag="$1"
+            local version_id
+
+            version_id="$(
+              gh api \
+                -H "Accept: application/vnd.github+json" \
+                "$versions_path" \
+                --paginate \
+                --jq ".[] | select(any(.metadata.container.tags[]?; . == \"$tag\") and all(.metadata.container.tags[]?; startswith(\"ci-\"))) | .id" \
+                | head -n 1
+            )"
+
+            if [[ -z "$version_id" ]]; then
+              echo "No unpromoted candidate version found for $tag"
               return 0
             fi
 
-            if delete_package orgs; then
-              return 0
-            fi
-
-            echo "No staging package found for $package"
+            echo "Deleting unpromoted candidate version for $tag"
+            gh api \
+              --method DELETE \
+              -H "Accept: application/vnd.github+json" \
+              "${versions_path%/versions}/versions/$version_id"
           }
 
-          if jq -e 'length == 0' <<< "$IMAGES" >/dev/null; then
-            echo "No images were staged"
-          else
-            delete_staging_package
-          fi
+          jq -c '.[]' <<< "$IMAGES" | while read -r image; do
+            major="$(jq -r '.major' <<< "$image")"
+            delete_candidate_version "ci-$RELEASE_TAG-$major-${{ github.run_id }}-${{ github.run_attempt }}"
+          done
 
   summary:
     name: Publish summary
