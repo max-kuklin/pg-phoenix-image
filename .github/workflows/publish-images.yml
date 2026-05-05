@@ -358,14 +358,23 @@ jobs:
         run: |
           set -euo pipefail
 
+          image_digest() {
+            docker buildx imagetools inspect "$1" --format '{{ json .Manifest }}' | jq -r '.digest'
+          }
+
           verify_existing_image() {
             local image="$1"
-            local expected_base="$2"
-            local expected_major="$3"
-            local expected_minor="$4"
+            local source="$2"
+            local expected_base="$3"
+            local expected_major="$4"
+            local expected_minor="$5"
             local labels
 
-            labels="$(docker buildx imagetools inspect "$image" --format '{{ json .Config.Labels }}')"
+            if [[ "$(image_digest "$image")" == "$(image_digest "$source")" ]]; then
+              return 0
+            fi
+
+            labels="$(docker buildx imagetools inspect "$image" --format '{{ json .Image.Config.Labels }}')"
 
             jq -e \
               --arg version "$RELEASE_TAG" \
@@ -384,12 +393,13 @@ jobs:
 
           add_new_immutable_tag() {
             local target="$1"
-            local expected_base="$2"
-            local expected_major="$3"
-            local expected_minor="$4"
+            local source="$2"
+            local expected_base="$3"
+            local expected_major="$4"
+            local expected_minor="$5"
 
             if docker manifest inspect "$REGISTRY_IMAGE:$target" >/dev/null 2>&1; then
-              if verify_existing_image "$REGISTRY_IMAGE:$target" "$expected_base" "$expected_major" "$expected_minor"; then
+              if verify_existing_image "$REGISTRY_IMAGE:$target" "$source" "$expected_base" "$expected_major" "$expected_minor"; then
                 echo "Tag already exists with matching metadata: $REGISTRY_IMAGE:$target"
                 return 0
               fi
@@ -411,7 +421,7 @@ jobs:
 
             mapfile -t immutable_tags < <(jq -r '.tags.immutable[]' <<< "$image")
             for immutable_tag in "${immutable_tags[@]}"; do
-              add_new_immutable_tag "$immutable_tag" "$base" "$major" "$minor"
+              add_new_immutable_tag "$immutable_tag" "$source" "$base" "$major" "$minor"
             done
 
             if [[ "$PUBLISH_MOVING_TAGS" == "true" ]]; then
