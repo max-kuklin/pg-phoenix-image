@@ -7,6 +7,10 @@ LOG_COMPONENT=entrypoint
 
 PG_MAJOR="$(postgres -V | awk '{print $3}' | cut -d. -f1)"
 PGDATA="${PGDATA:-/var/lib/postgresql/$PG_MAJOR/docker}"
+if [[ "$PGDATA" == "/var/lib/postgresql/data" ]]; then
+  PGDATA="/var/lib/postgresql/$PG_MAJOR/docker"
+fi
+export PGDATA
 PG_BINARY_STASH_ROOT="${PG_BINARY_STASH_ROOT:-/var/lib/postgresql/.pg-binaries}"
 PG_STASH_BINARIES=(postgres pg_upgrade pg_ctl pg_controldata pg_resetwal pg_dump pg_dumpall)
 

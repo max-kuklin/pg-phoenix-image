@@ -286,16 +286,14 @@ prepare_new_pgdata() {
   local bin_dir
   local old_bin
   local checksum_version
-  local checksum_arg
+  local checksum_args=()
 
   bin_dir="$(new_bin_dir)"
   old_bin="$(old_bin_dir)"
   checksum_version="$("$old_bin/pg_controldata" "$PGDATA" | awk -F: '/Data page checksum version/ { gsub(/^[ \t]+/, "", $2); print $2 }')"
 
-  if [[ "$checksum_version" == "0" ]]; then
-    checksum_arg="--no-data-checksums"
-  else
-    checksum_arg="--data-checksums"
+  if [[ "$checksum_version" != "0" ]]; then
+    checksum_args+=(--data-checksums)
   fi
 
   rm -rf "$new_pgdata"
@@ -303,7 +301,7 @@ prepare_new_pgdata() {
   chown_postgres_if_available "$new_pgdata"
 
   log_phase "initializing PostgreSQL $PG_NEW_MAJOR data directory"
-  as_postgres "$bin_dir/initdb" "$checksum_arg" -D "$new_pgdata"
+  as_postgres "$bin_dir/initdb" "${checksum_args[@]}" -D "$new_pgdata"
 }
 
 run_pg_upgrade() {
