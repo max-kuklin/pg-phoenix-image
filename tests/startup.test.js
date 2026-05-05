@@ -7,6 +7,11 @@ import { describe, expect, test } from 'vitest';
 import { IMAGE_NAME } from './helpers/containers.js';
 
 const execFileAsync = promisify(execFile);
+const PG_MAJOR = process.env.PG_TEST_MAJOR ?? '18';
+const OLD_MAJOR = process.env.PG_TEST_PREVIOUS_MAJOR ?? String(Number(PG_MAJOR) - 1);
+const PGDATA = `/var/lib/postgresql/${PG_MAJOR}/docker`;
+const PG_BIN = `/usr/lib/postgresql/${PG_MAJOR}/bin`;
+const OLD_STASH = `/var/lib/postgresql/.pg-binaries/${OLD_MAJOR}`;
 
 async function runImage(env = {}, options = {}) {
   const name = `pg-phoenix-startup-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -144,10 +149,10 @@ describe('startup behavior', () => {
 
       expect(result.code, result.stderr).toBe(0);
 
-      const checksum = await readPgDataFile(pgDataParent, '.pg-binaries/18/checksum');
+      const checksum = await readPgDataFile(pgDataParent, `.pg-binaries/${PG_MAJOR}/checksum`);
 
-      expect(checksum).toContain('/usr/lib/postgresql/18/bin/postgres');
-      expect(checksum).toContain('/usr/lib/postgresql/18/bin/pg_upgrade');
+      expect(checksum).toContain(`${PG_BIN}/postgres`);
+      expect(checksum).toContain(`${PG_BIN}/pg_upgrade`);
     });
   });
 
@@ -155,7 +160,7 @@ describe('startup behavior', () => {
     await withPgData(async ({ pgDataParent }) => {
       await setupPgData(
         pgDataParent,
-        'mkdir -p /var/lib/postgresql/18/docker && printf "17\\n" > /var/lib/postgresql/18/docker/PG_VERSION && chmod -R 0777 /var/lib/postgresql'
+        `mkdir -p ${PGDATA} && printf "${OLD_MAJOR}\\n" > ${PGDATA}/PG_VERSION && chmod -R 0777 /var/lib/postgresql`
       );
 
       const result = await runImage(
@@ -167,7 +172,7 @@ describe('startup behavior', () => {
       );
 
       expect(result.code).toBe(1);
-      expect(result.stderr).toContain('[entrypoint] PGDATA is version 17 but this image runs PostgreSQL 18');
+      expect(result.stderr).toContain(`[entrypoint] PGDATA is version ${OLD_MAJOR} but this image runs PostgreSQL ${PG_MAJOR}`);
       expect(result.stderr).toContain('Set PG_UPGRADE=true to perform an in-place major upgrade');
     });
   });
@@ -176,7 +181,7 @@ describe('startup behavior', () => {
     await withPgData(async ({ pgDataParent }) => {
       await setupPgData(
         pgDataParent,
-        'mkdir -p /var/lib/postgresql/18/docker && printf "17\\n" > /var/lib/postgresql/18/docker/PG_VERSION && chmod -R 0777 /var/lib/postgresql'
+        `mkdir -p ${PGDATA} && printf "${OLD_MAJOR}\\n" > ${PGDATA}/PG_VERSION && chmod -R 0777 /var/lib/postgresql`
       );
 
       const result = await runImage(
@@ -190,7 +195,7 @@ describe('startup behavior', () => {
       );
 
       expect(result.code).toBe(1);
-      expect(result.stderr).toContain('[upgrade] no stashed PostgreSQL binaries for version 17');
+      expect(result.stderr).toContain(`[upgrade] no stashed PostgreSQL binaries for version ${OLD_MAJOR}`);
     });
   });
 
@@ -215,11 +220,11 @@ describe('startup behavior', () => {
         await setupPgData(
           pgDataParent,
           [
-            'mkdir -p /var/lib/postgresql/18/docker /var/lib/postgresql/.pg-binaries/17/bin /var/lib/postgresql/.pg-binaries/17/lib /var/lib/postgresql/.pg-binaries/17/share',
-            'printf "17\\n" > /var/lib/postgresql/18/docker/PG_VERSION',
-            'for binary in postgres pg_upgrade pg_controldata pg_resetwal pg_dump pg_dumpall; do printf "%s\\n" "#!/usr/bin/env bash" "exit 0" > "/var/lib/postgresql/.pg-binaries/17/bin/$binary"; done',
-            'printf "%s\\n" "#!/usr/bin/env bash" "printf \\"pg_ctl:%s\\\\n\\" \\"\\$*\\" >> /var/lib/postgresql/pg_ctl.log" "exit 0" > /var/lib/postgresql/.pg-binaries/17/bin/pg_ctl',
-            'chmod +x /var/lib/postgresql/.pg-binaries/17/bin/*',
+            `mkdir -p ${PGDATA} ${OLD_STASH}/bin ${OLD_STASH}/lib ${OLD_STASH}/share`,
+            `printf "${OLD_MAJOR}\\n" > ${PGDATA}/PG_VERSION`,
+            `for binary in postgres pg_upgrade pg_controldata pg_resetwal pg_dump pg_dumpall; do printf "%s\\n" "#!/usr/bin/env bash" "exit 0" > "${OLD_STASH}/bin/$binary"; done`,
+            `printf "%s\\n" "#!/usr/bin/env bash" "printf \\"pg_ctl:%s\\\\n\\" \\"\\$*\\" >> /var/lib/postgresql/pg_ctl.log" "exit 0" > ${OLD_STASH}/bin/pg_ctl`,
+            `chmod +x ${OLD_STASH}/bin/*`,
             'chmod -R 0777 /var/lib/postgresql'
           ].join(' && ')
         );
@@ -228,7 +233,7 @@ describe('startup behavior', () => {
           {
             PG_UPGRADE: 'true',
             WALG_S3_PREFIX: 's3://bucket/db',
-            PATH: '/tmp/bin:/usr/lib/postgresql/18/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+            PATH: `/tmp/bin:${PG_BIN}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`
           },
           {
             command: ['postgres', '--help'],
@@ -243,13 +248,13 @@ describe('startup behavior', () => {
         const walGLog = await readPgDataFile(pgDataParent, 'walg.log');
 
         expect(result.code).toBe(1);
-        expect(result.stderr).toContain('[upgrade] ------ starting PostgreSQL 17 for pre-upgrade backup ------');
+        expect(result.stderr).toContain(`[upgrade] ------ starting PostgreSQL ${OLD_MAJOR} for pre-upgrade backup ------`);
         expect(result.stderr).toContain('[upgrade] ------ pushing pre-upgrade backup ------');
-        expect(result.stderr).toContain('[upgrade] ------ initializing PostgreSQL 18 data directory ------');
+        expect(result.stderr).toContain(`[upgrade] ------ initializing PostgreSQL ${PG_MAJOR} data directory ------`);
         expect(result.stderr).toContain('[upgrade] ------ checking PostgreSQL major upgrade ------');
         expect(pgCtlLog).toContain("-p 5433 -c listen_addresses='localhost'");
         expect(pgCtlLog).toContain('-m fast -w stop');
-        expect(walGLog).toContain('wal-g:backup-push /var/lib/postgresql/18/docker:PGHOST=localhost:PGPORT=5433');
+        expect(walGLog).toContain(`wal-g:backup-push ${PGDATA}:PGHOST=localhost:PGPORT=5433`);
       } finally {
         await rm(fakeBin, { recursive: true, force: true });
       }
@@ -260,7 +265,7 @@ describe('startup behavior', () => {
     await withPgData(async ({ pgDataParent }) => {
       await setupPgData(
         pgDataParent,
-        'mkdir -p /var/lib/postgresql/18/docker && printf "18\\n" > /var/lib/postgresql/18/docker/PG_VERSION && chmod -R 0777 /var/lib/postgresql'
+        `mkdir -p ${PGDATA} && printf "${PG_MAJOR}\\n" > ${PGDATA}/PG_VERSION && chmod -R 0777 /var/lib/postgresql`
       );
 
       const result = await runImage(
@@ -290,9 +295,9 @@ describe('startup behavior', () => {
         await setupPgData(
           pgDataParent,
           [
-            'mkdir -p /var/lib/postgresql/18/docker',
-            'printf "18\\n" > /var/lib/postgresql/18/docker/PG_VERSION',
-            'printf "original\\n" > /var/lib/postgresql/18/docker/sentinel',
+            `mkdir -p ${PGDATA}`,
+            `printf "${PG_MAJOR}\\n" > ${PGDATA}/PG_VERSION`,
+            `printf "original\\n" > ${PGDATA}/sentinel`,
             'chmod -R 0777 /var/lib/postgresql'
           ].join(' && ')
         );
@@ -300,9 +305,9 @@ describe('startup behavior', () => {
         const result = await runImage(
           {
             POSTGRES_PASSWORD: 'test',
-            PATH: '/tmp/bin:/usr/lib/postgresql/18/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+            PATH: `/tmp/bin:${PG_BIN}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
             WALG_S3_PREFIX: 's3://pg-phoenix-missing/target',
-            PG_RESTORE_FROM: 's3://pg-phoenix-missing/source/18',
+            PG_RESTORE_FROM: `s3://pg-phoenix-missing/source/${PG_MAJOR}`,
             PG_RESTORE_REQUEST_ID: 'failed-fetch',
             PG_RESTORE_OVERWRITE: 'true'
           },
@@ -314,7 +319,7 @@ describe('startup behavior', () => {
           }
         );
 
-        const sentinel = await readPgDataFile(pgDataParent, '18/docker/sentinel');
+        const sentinel = await readPgDataFile(pgDataParent, `${PG_MAJOR}/docker/sentinel`);
 
         expect(result.code, result.stderr).toBe(37);
         expect(result.stderr).toContain('[restore] ------ fetching backup ------');
@@ -331,11 +336,11 @@ describe('startup behavior', () => {
       await setupPgData(
         pgDataParent,
         [
-          'mkdir -p /var/lib/postgresql/18/docker /var/lib/postgresql/18/pre-restore',
-          'printf "18\\n" > /var/lib/postgresql/18/docker/PG_VERSION',
-          'printf "current\\n" > /var/lib/postgresql/18/docker/sentinel',
-          'printf "18\\n" > /var/lib/postgresql/18/pre-restore/PG_VERSION',
-          'printf "previous\\n" > /var/lib/postgresql/18/pre-restore/sentinel',
+          `mkdir -p /var/lib/postgresql/${PG_MAJOR}/docker /var/lib/postgresql/${PG_MAJOR}/pre-restore`,
+          `printf "${PG_MAJOR}\\n" > /var/lib/postgresql/${PG_MAJOR}/docker/PG_VERSION`,
+          `printf "current\\n" > /var/lib/postgresql/${PG_MAJOR}/docker/sentinel`,
+          `printf "${PG_MAJOR}\\n" > /var/lib/postgresql/${PG_MAJOR}/pre-restore/PG_VERSION`,
+          `printf "previous\\n" > /var/lib/postgresql/${PG_MAJOR}/pre-restore/sentinel`,
           'chmod -R 0777 /var/lib/postgresql'
         ].join(' && ')
       );
@@ -355,9 +360,9 @@ describe('startup behavior', () => {
       expect(result.code, result.stderr).toBe(0);
       expect(result.stderr).toContain('[restore] pre-restore data restored');
 
-      const active = await readPgDataFile(pgDataParent, '18/docker/sentinel');
-      const failed = await readPgDataFile(pgDataParent, '18/failed-restore/sentinel');
-      const marker = await readPgDataFile(pgDataParent, '18/restore-state/rollback-e2e.rollback-completed');
+      const active = await readPgDataFile(pgDataParent, `${PG_MAJOR}/docker/sentinel`);
+      const failed = await readPgDataFile(pgDataParent, `${PG_MAJOR}/failed-restore/sentinel`);
+      const marker = await readPgDataFile(pgDataParent, `${PG_MAJOR}/restore-state/rollback-e2e.rollback-completed`);
 
       expect(active).toBe('previous\n');
       expect(failed).toBe('current\n');
@@ -370,10 +375,10 @@ describe('startup behavior', () => {
       await setupPgData(
         pgDataParent,
         [
-          'mkdir -p /var/lib/postgresql/18/docker /var/lib/postgresql/18/restore-state',
-          'printf "18\\n" > /var/lib/postgresql/18/docker/PG_VERSION',
-          'printf "current\\n" > /var/lib/postgresql/18/docker/sentinel',
-          'printf "done\\n" > /var/lib/postgresql/18/restore-state/rollback-e2e.rollback-completed',
+          `mkdir -p /var/lib/postgresql/${PG_MAJOR}/docker /var/lib/postgresql/${PG_MAJOR}/restore-state`,
+          `printf "${PG_MAJOR}\\n" > /var/lib/postgresql/${PG_MAJOR}/docker/PG_VERSION`,
+          `printf "current\\n" > /var/lib/postgresql/${PG_MAJOR}/docker/sentinel`,
+          `printf "done\\n" > /var/lib/postgresql/${PG_MAJOR}/restore-state/rollback-e2e.rollback-completed`,
           'chmod -R 0777 /var/lib/postgresql'
         ].join(' && ')
       );
@@ -393,7 +398,7 @@ describe('startup behavior', () => {
       expect(result.code, result.stderr).toBe(0);
       expect(result.stderr).toContain('[restore] restore rollback request already completed; skipping');
 
-      const active = await readPgDataFile(pgDataParent, '18/docker/sentinel');
+      const active = await readPgDataFile(pgDataParent, `${PG_MAJOR}/docker/sentinel`);
 
       expect(active).toBe('current\n');
     });

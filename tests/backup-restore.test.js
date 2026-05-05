@@ -17,6 +17,11 @@ import {
 } from './helpers/containers.js';
 
 const execFileAsync = promisify(execFile);
+const PG_MAJOR = process.env.PG_TEST_MAJOR ?? '18';
+const PG_PREFIX = `pg/${PG_MAJOR}`;
+const RESTORE_SOURCE_PREFIX = `s3://pg-phoenix-test/restore-source/${PG_MAJOR}`;
+const PGDATA = `/var/lib/postgresql/${PG_MAJOR}/docker`;
+const RESTORE_STATE = `/var/lib/postgresql/${PG_MAJOR}/restore-state`;
 
 async function containerLogs(container) {
   const stream = await container.logs({ tail: 200 });
@@ -105,7 +110,7 @@ describe('backup with S3-compatible object storage', () => {
     expect(envFile.exitCode).toBe(0);
     expect(envFile.stdout.trim()).toBe('600');
     expect(envContent.exitCode).toBe(0);
-    expect(envContent.stdout).toBe('s3://pg-phoenix-test/pg/18');
+    expect(envContent.stdout).toBe(`s3://pg-phoenix-test/${PG_PREFIX}`);
     expect(cronFile.exitCode).toBe(0);
     expect(cronFile.stdout).toContain('0 0 * * * postgres /usr/local/bin/backup.sh');
   });
@@ -124,9 +129,9 @@ describe('backup with S3-compatible object storage', () => {
   });
 
   test('stores base backup objects under the version-scoped prefix', async () => {
-    const listing = await waitForObjectStorageObject(topology, 'pg/18', /basebackups_/);
+    const listing = await waitForObjectStorageObject(topology, PG_PREFIX, /basebackups_/);
 
-    expect(listing).toContain(`s3://${OBJECT_STORAGE_BUCKET}/pg/18/`);
+    expect(listing).toContain(`s3://${OBJECT_STORAGE_BUCKET}/${PG_PREFIX}/`);
     expect(listing).toContain('basebackups_');
   });
 
@@ -135,9 +140,9 @@ describe('backup with S3-compatible object storage', () => {
     await topology.pg.query('INSERT INTO phase3_wal_check VALUES (1)');
     await topology.pg.query('SELECT pg_switch_wal()');
 
-    const listing = await waitForObjectStorageObject(topology, 'pg/18', /wal_/);
+    const listing = await waitForObjectStorageObject(topology, PG_PREFIX, /wal_/);
 
-    expect(listing).toContain(`s3://${OBJECT_STORAGE_BUCKET}/pg/18/`);
+    expect(listing).toContain(`s3://${OBJECT_STORAGE_BUCKET}/${PG_PREFIX}/`);
     expect(listing).toContain('wal_');
   });
 
@@ -148,7 +153,7 @@ describe('backup with S3-compatible object storage', () => {
       .filter((line) => line.includes('basebackups_') || line.includes('wal_'));
 
     expect(objectLines.length).toBeGreaterThan(0);
-    expect(objectLines.every((line) => line.includes(`s3://${OBJECT_STORAGE_BUCKET}/pg/18/`))).toBe(true);
+    expect(objectLines.every((line) => line.includes(`s3://${OBJECT_STORAGE_BUCKET}/${PG_PREFIX}/`))).toBe(true);
   });
 
   test('retains only the configured number of full backups', async () => {
@@ -234,7 +239,7 @@ describe('startup restore with S3-compatible object storage', () => {
     const bindMounts = [{ source: pgDataDir, target: '/var/lib/postgresql', mode: 'rw' }];
     const restoreEnv = {
       ...objectStoragePgEnv('s3://pg-phoenix-test/restore-target'),
-      PG_RESTORE_FROM: 's3://pg-phoenix-test/restore-source/18',
+      PG_RESTORE_FROM: RESTORE_SOURCE_PREFIX,
       PG_RESTORE_REQUEST_ID: 'restore-e2e-latest'
     };
 
@@ -247,7 +252,7 @@ describe('startup restore with S3-compatible object storage', () => {
     });
 
     const restored = await waitForQuery(target, 'SELECT value FROM restore_e2e_check WHERE id = 1');
-    const marker = await target.exec(['bash', '-lc', 'test -f /var/lib/postgresql/18/restore-state/restore-e2e-latest.completed']);
+    const marker = await target.exec(['bash', '-lc', `test -f ${RESTORE_STATE}/restore-e2e-latest.completed`]);
 
     expect(restored.rows[0].value).toBe('from backup');
     expect(marker.exitCode).toBe(0);
@@ -278,7 +283,7 @@ describe('startup restore with S3-compatible object storage', () => {
         waitStrategy: Wait.forLogMessage(/restore prepared for PostgreSQL startup/),
         env: {
           ...objectStoragePgEnv('s3://pg-phoenix-test/restore-pitr-target'),
-          PG_RESTORE_FROM: 's3://pg-phoenix-test/restore-source/18',
+          PG_RESTORE_FROM: RESTORE_SOURCE_PREFIX,
           PG_RESTORE_TARGET_TIME: pitrTargetTime,
           PG_RESTORE_REQUEST_ID: 'restore-e2e-pitr'
         }
@@ -302,7 +307,7 @@ describe('startup restore with S3-compatible object storage', () => {
     try {
       const env = {
         ...objectStoragePgEnv('s3://pg-phoenix-test/restore-bad-source-target'),
-        PG_RESTORE_FROM: 's3://pg-phoenix-test/restore-missing-source/18',
+        PG_RESTORE_FROM: `s3://pg-phoenix-test/restore-missing-source/${PG_MAJOR}`,
         PG_RESTORE_REQUEST_ID: 'restore-e2e-bad-source'
       };
       const args = [
@@ -340,7 +345,7 @@ describe('startup restore with S3-compatible object storage', () => {
         'bash',
         IMAGE_NAME,
         '-lc',
-        'test ! -e /var/lib/postgresql/18/docker/PG_VERSION'
+        `test ! -e ${PGDATA}/PG_VERSION`
       ]);
 
       expect(restore.code).not.toBe(0);

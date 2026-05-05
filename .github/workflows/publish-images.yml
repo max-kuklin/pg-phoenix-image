@@ -233,6 +233,7 @@ jobs:
         working-directory: harness
         env:
           PG_PHOENIX_IMAGE: ${{ env.LOCAL_IMAGE }}
+          PG_TEST_MAJOR: ${{ matrix.major }}
         run: npm run test:e2e
 
       - name: Log in to GitHub Container Registry
@@ -247,12 +248,43 @@ jobs:
         if: env.DRY_RUN != 'true'
         env:
           IMMUTABLE_TAGS: ${{ toJson(matrix.tags.immutable) }}
+          EXPECTED_VERSION: ${{ needs.plan.outputs.release_tag }}
+          EXPECTED_REVISION: ${{ needs.plan.outputs.release_sha }}
+          EXPECTED_BASE: ${{ matrix.base }}
+          EXPECTED_MAJOR: ${{ matrix.major }}
+          EXPECTED_MINOR: ${{ matrix.minor }}
         run: |
           set -euo pipefail
 
+          verify_existing_image() {
+            local image="$1"
+            local labels
+
+            labels="$(docker buildx imagetools inspect "$image" --format '{{ json .Config.Labels }}')"
+
+            jq -e \
+              --arg version "$EXPECTED_VERSION" \
+              --arg revision "$EXPECTED_REVISION" \
+              --arg base "$EXPECTED_BASE" \
+              --arg major "$EXPECTED_MAJOR" \
+              --arg minor "$EXPECTED_MINOR" \
+              '
+                ."org.opencontainers.image.version" == $version and
+                ."org.opencontainers.image.revision" == $revision and
+                ."org.pg-phoenix.postgres.base" == $base and
+                ."org.pg-phoenix.postgres.major" == $major and
+                ."org.pg-phoenix.postgres.minor" == $minor
+              ' <<< "$labels" >/dev/null
+          }
+
           jq -r '.[]' <<< "$IMMUTABLE_TAGS" | while read -r tag; do
             if docker manifest inspect "$REGISTRY_IMAGE:$tag" >/dev/null 2>&1; then
-              echo "Immutable tag already exists: $REGISTRY_IMAGE:$tag" >&2
+              if verify_existing_image "$REGISTRY_IMAGE:$tag"; then
+                echo "Immutable tag already exists with matching metadata: $REGISTRY_IMAGE:$tag"
+                continue
+              fi
+
+              echo "Immutable tag already exists with different metadata: $REGISTRY_IMAGE:$tag" >&2
               exit 1
             fi
 
@@ -269,6 +301,7 @@ jobs:
 
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         include: ${{ fromJson(needs.plan.outputs.upgrade_pairs) }}
 
