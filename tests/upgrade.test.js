@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { chmod, mkdtemp, rm } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -27,10 +27,17 @@ async function buildOldImage() {
     return;
   }
 
+  const releaseTracks = JSON.parse(await readFile('release-tracks.json', 'utf8'));
+  const oldTrack = releaseTracks.tracks.find((track) => track.major === OLD_MAJOR);
+
+  if (!oldTrack) {
+    throw new Error(`No release track found for PostgreSQL ${OLD_MAJOR}`);
+  }
+
   await execFileAsync('docker', [
     'build',
     '--build-arg',
-    `PG_BASE=postgres:${OLD_MAJOR}`,
+    `PG_BASE=${oldTrack.base}`,
     '-t',
     OLD_IMAGE,
     '.'
@@ -116,6 +123,7 @@ describe('major upgrade', () => {
     await source.stop();
 
     let upgraded;
+    let upgradeLogs = '';
 
     try {
       upgraded = await startPg({
@@ -132,12 +140,17 @@ describe('major upgrade', () => {
         imageName: NEW_IMAGE,
         containerName: upgradeContainerName,
         autoRemove: false,
+        logConsumer: (stream) => {
+          stream.on('data', (data) => {
+            upgradeLogs += data.toString();
+          });
+        },
         startupTimeoutMs: 240_000
       });
     } catch (error) {
       const logs = await execFileAsync('docker', ['logs', upgradeContainerName], {
         maxBuffer: 1024 * 1024
-      }).catch((logsError) => ({ stdout: '', stderr: logsError.message }));
+      }).catch((logsError) => ({ stdout: upgradeLogs, stderr: logsError.message }));
       await execFileAsync('docker', ['rm', '-f', upgradeContainerName]).catch(() => {});
       throw new Error(`${error.message}\n${logs.stdout}${logs.stderr}`);
     }

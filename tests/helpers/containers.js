@@ -29,6 +29,10 @@ export async function startPg(overrides = {}) {
     builder = builder.withAutoRemove(overrides.autoRemove);
   }
 
+  if (overrides.logConsumer) {
+    builder = builder.withLogConsumer(overrides.logConsumer);
+  }
+
   if (overrides.startupTimeoutMs) {
     builder = builder.withStartupTimeout(overrides.startupTimeoutMs);
   }
