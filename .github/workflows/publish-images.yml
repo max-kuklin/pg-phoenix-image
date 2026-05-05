@@ -365,6 +365,7 @@ jobs:
         env:
           PG_TEST_OLD: ${{ matrix.oldMajor }}
           PG_TEST_NEW: ${{ matrix.newMajor }}
+          PG_PHOENIX_IMAGE: ${{ env.NEW_IMAGE }}
           PG_PHOENIX_NEW_IMAGE: ${{ env.NEW_IMAGE }}
         run: npm run test:upgrade
 

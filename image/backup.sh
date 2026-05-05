@@ -6,7 +6,13 @@ LOG_COMPONENT=backup
 
 WALG_ENV_FILE="${WALG_ENV_FILE:-/etc/walg-env.sh}"
 BACKUP_LOCK_FILE="${BACKUP_LOCK_FILE:-/var/run/postgresql/backup.lock}"
-PGDATA="${PGDATA:-/var/lib/postgresql/data}"
+PG_MAJOR="${PG_MAJOR:-18}"
+PGDATA="${PGDATA:-/var/lib/postgresql/$PG_MAJOR/docker}"
+
+if [[ "$PGDATA" == "/var/lib/postgresql/data" ]]; then
+  PGDATA="/var/lib/postgresql/$PG_MAJOR/docker"
+fi
+export PGDATA
 
 if ! pg_isready -q; then
   log_warn "PostgreSQL is not ready; skipping backup"

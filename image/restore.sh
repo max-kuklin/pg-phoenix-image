@@ -6,7 +6,13 @@ LOG_COMPONENT=restore
 . "${WALG_LIB_PATH:-/usr/local/lib/walg.sh}"
 . "${RESTORE_ARGS_LIB_PATH:-/usr/local/lib/restore-args.sh}"
 
-PGDATA="${PGDATA:-/var/lib/postgresql/${PG_MAJOR:-18}/docker}"
+PG_MAJOR="${PG_MAJOR:-18}"
+PGDATA="${PGDATA:-/var/lib/postgresql/$PG_MAJOR/docker}"
+if [[ "$PGDATA" == "/var/lib/postgresql/data" ]]; then
+  PGDATA="/var/lib/postgresql/$PG_MAJOR/docker"
+fi
+export PGDATA
+
 WALG_ENV_FILE="${WALG_ENV_FILE:-/etc/walg-env.sh}"
 RESTORE_OVERWRITE="${RESTORE_OVERWRITE:-false}"
 RESTORE_ROLLBACK="${RESTORE_ROLLBACK:-false}"

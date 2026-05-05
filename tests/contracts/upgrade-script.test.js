@@ -10,7 +10,7 @@ const mockRuntime = [
   'printf "%s\\n" "#!/usr/bin/env bash" "while [[ \\"\\$#\\" -gt 0 ]]; do if [[ \\"\\$1\\" == -D ]]; then shift; mkdir -p \\"\\$1\\"; printf \\"18\\\\n\\" > \\"\\$1/PG_VERSION\\"; fi; shift || true; done" > /tmp/bin/initdb',
   'printf "%s\\n" "#!/usr/bin/env bash" "printf \\"pg_upgrade:%s\\\\n\\" \\"\\$*\\" >> /tmp/pg_upgrade.log" "exit 0" > /tmp/bin/pg_upgrade',
   'printf "%s\\n" "#!/usr/bin/env bash" "printf \\"new_pg_ctl:%s\\\\n\\" \\"\\$*\\" >> /tmp/pg_ctl.log" "exit 0" > /tmp/bin/pg_ctl',
-  'printf "%s\\n" "#!/usr/bin/env bash" "printf \\"vacuumdb:%s\\\\n\\" \\"\\$*\\" >> /tmp/vacuumdb.log" "exit 0" > /tmp/bin/vacuumdb',
+  'printf "%s\\n" "#!/usr/bin/env bash" "if [[ \\"\\$1\\" == --help ]]; then printf \\"%s\\\\n\\" \\"vacuumdb help --missing-stats-only\\"; exit 0; fi" "printf \\"vacuumdb:%s\\\\n\\" \\"\\$*\\" >> /tmp/vacuumdb.log" "exit 0" > /tmp/bin/vacuumdb',
   'chmod +x /tmp/pg-binaries/17/bin/*',
   'chmod +x /tmp/bin/postgres /tmp/bin/initdb /tmp/bin/pg_upgrade /tmp/bin/pg_ctl /tmp/bin/vacuumdb',
   'export PATH=/tmp/bin:$PATH',
@@ -116,6 +116,23 @@ describe('upgrade script contracts', () => {
     expect(result.stdout).toContain('vacuumdb:--all --analyze-in-stages --missing-stats-only');
     expect(result.stdout).toContain('vacuumdb:--all --analyze-only');
     expect(result.stderr).toContain('[upgrade] ------ running post-upgrade analyze ------');
+  });
+
+  test('omits missing-stats-only when target vacuumdb does not support it', async () => {
+    const result = await bash.run([
+      ...mockRuntime,
+      'rm -f /tmp/vacuumdb.log',
+      'printf "%s\\n" "#!/usr/bin/env bash" "if [[ \\"\\$1\\" == --help ]]; then printf \\"%s\\\\n\\" \\"vacuumdb help\\"; exit 0; fi" "printf \\"vacuumdb:%s\\\\n\\" \\"\\$*\\" >> /tmp/vacuumdb.log" "exit 0" > /tmp/bin/vacuumdb',
+      'printf "%s\\n" "#!/usr/bin/env bash" "if [[ \\"\\$1\\" == backup-list ]]; then date -u +\\"backup_name last_modified\\nbase_1 %Y-%m-%dT%H:%M:%SZ\\"; exit 0; fi" "if [[ \\"\\$1\\" == backup-push ]]; then exit 0; fi" "exit 1" > /tmp/bin/wal-g',
+      'chmod +x /tmp/bin/vacuumdb /tmp/bin/wal-g',
+      'bash ./image/upgrade.sh',
+      'cat /tmp/vacuumdb.log'
+    ].join('; '));
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('vacuumdb:--all --analyze-in-stages');
+    expect(result.stdout).not.toContain('--missing-stats-only');
+    expect(result.stdout).toContain('vacuumdb:--all --analyze-only');
   });
 
   test('refuses upgrade when pushed backup is not visible', async () => {

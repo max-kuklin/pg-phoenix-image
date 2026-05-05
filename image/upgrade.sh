@@ -351,11 +351,16 @@ swap_pgdata() {
 run_post_upgrade_analyze() {
   local analyze_script="$upgrade_work_dir/analyze_new_cluster.sh"
   local bin_dir
+  local vacuum_args=(--all --analyze-in-stages)
 
   log_phase "running post-upgrade analyze"
   if [[ ! -x "$analyze_script" ]]; then
     bin_dir="$(new_bin_dir)"
-    as_postgres "$bin_dir/vacuumdb" --all --analyze-in-stages --missing-stats-only
+    if "$bin_dir/vacuumdb" --help 2>&1 | grep -q -- '--missing-stats-only'; then
+      vacuum_args+=(--missing-stats-only)
+    fi
+
+    as_postgres "$bin_dir/vacuumdb" "${vacuum_args[@]}"
     as_postgres "$bin_dir/vacuumdb" --all --analyze-only
     return 0
   fi
