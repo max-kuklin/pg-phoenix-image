@@ -14,7 +14,7 @@ describe('logger contract', () => {
 
   test('writes INFO logs to stderr with UTC timestamp and component', async () => {
     const result = await bash.run(
-      "LOG_COMPONENT=contract; . ./scripts/lib/logger.sh; log_info 'hello world'"
+      "LOG_COMPONENT=contract; . ./image/lib/logger.sh; log_info 'hello world'"
     );
 
     expect(result.code).toBe(0);
@@ -24,7 +24,7 @@ describe('logger contract', () => {
 
   test('filters DEBUG logs at the default INFO level', async () => {
     const result = await bash.run(
-      "LOG_COMPONENT=contract; . ./scripts/lib/logger.sh; log_debug 'hidden'"
+      "LOG_COMPONENT=contract; . ./image/lib/logger.sh; log_debug 'hidden'"
     );
 
     expect(result.code).toBe(0);
@@ -34,7 +34,7 @@ describe('logger contract', () => {
 
   test('prints DEBUG logs when LOG_LEVEL=DEBUG', async () => {
     const result = await bash.run(
-      "LOG_COMPONENT=contract; . ./scripts/lib/logger.sh; log_debug 'visible'",
+      "LOG_COMPONENT=contract; . ./image/lib/logger.sh; log_debug 'visible'",
       { env: { LOG_LEVEL: 'DEBUG' } }
     );
 
@@ -44,7 +44,7 @@ describe('logger contract', () => {
 
   test('log_fatal writes ERROR and exits with code 1', async () => {
     const result = await bash.run(
-      "LOG_COMPONENT=contract; . ./scripts/lib/logger.sh; log_fatal 'stop now'"
+      "LOG_COMPONENT=contract; . ./image/lib/logger.sh; log_fatal 'stop now'"
     );
 
     expect(result.code).toBe(1);

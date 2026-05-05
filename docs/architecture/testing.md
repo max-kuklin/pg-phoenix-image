@@ -63,7 +63,7 @@ tests/
 
 `tests/helpers/shell.js` centralizes running Bash inside Linux, mounting the repo, setting temp dirs, and capturing stdout/stderr. Fake external binaries should be used only when the contract under test is pure Bash behavior. If a test needs a realistic PostgreSQL or WAL-G process, it is not a contract test.
 
-As scripts grow, shared pure behavior should move into small sourceable files under `scripts/lib/`. The executable scripts should remain thin orchestration layers.
+As scripts grow, shared pure behavior should move into small sourceable files under `image/lib/`. The executable scripts should remain thin orchestration layers.
 
 ## Layer 2: Image and E2E Tests
 

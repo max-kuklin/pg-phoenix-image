@@ -2,11 +2,11 @@
 
 ## Purpose
 
-Unified logging for all shell scripts (entrypoint, backup, restore, upgrade). Consistent output format across features, parseable by Kubernetes log collectors, colored for interactive debugging.
+Unified logging for image runtime shell scripts (entrypoint, backup, restore, upgrade). Consistent output format across features, parseable by Kubernetes log collectors, colored for interactive debugging.
 
 ## Concept
 
-All scripts source a shared library (`scripts/lib/logger.sh`) that provides leveled logging functions. Output goes to stderr — PG owns stdout via the official entrypoint. Kubernetes captures stderr as container logs. Colors are auto-detected: on for TTY (`kubectl exec`), off for pipe (Fluentd, Loki, CloudWatch).
+Image runtime scripts source a shared library (`image/lib/logger.sh`) that provides leveled logging functions. Output goes to stderr — PG owns stdout via the official entrypoint. Kubernetes captures stderr as container logs. Colors are auto-detected: on for TTY (`kubectl exec`), off for pipe (Fluentd, Loki, CloudWatch).
 
 ## Output Format
 
@@ -60,7 +60,7 @@ env:
 
 ## Usage in Scripts
 
-Each script sources the library after setting its component name. Inside the container, the canonical path is `/usr/local/lib/logger.sh` (source: `scripts/lib/logger.sh` — see Dockerfile `COPY` step). All scripts use:
+Each image runtime script sources the library after setting its component name. Inside the container, the canonical path is `/usr/local/lib/logger.sh` (source: `image/lib/logger.sh` — see Dockerfile `COPY` step). Runtime shell scripts use:
 
 ```bash
 LOG_COMPONENT=backup

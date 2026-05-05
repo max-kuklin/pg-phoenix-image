@@ -1,0 +1,82 @@
+name: Release Tracks
+
+on:
+  schedule:
+    - cron: "43 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-tracks
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Update release tracks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3.1.1
+        with:
+          client-id: ${{ secrets.RENOVATE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RENOVATE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Check out repository
+        uses: actions/checkout@v6.0.2
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6.4.0
+        with:
+          node-version: "25"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Update release tracks
+        id: update
+        run: |
+          set -euo pipefail
+
+          node scripts/update-release-tracks.js
+
+          if git diff --quiet -- release-tracks.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open pull request
+        if: steps.update.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          BRANCH: release-tracks/postgres-major
+        run: |
+          set -euo pipefail
+
+          git config user.name "pg-phoenix-renovate[bot]"
+          git config user.email "281750117+pg-phoenix-renovate[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git add release-tracks.json
+          git commit -m "Add PostgreSQL major release track"
+          git push --force-with-lease origin "$BRANCH"
+
+          if gh pr view "$BRANCH" --json number >/dev/null 2>&1; then
+            gh pr edit "$BRANCH" \
+              --title "Add PostgreSQL major release track" \
+              --body "Adds newly published PostgreSQL major bookworm track(s) to release-tracks.json."
+          else
+            gh pr create \
+              --base main \
+              --head "$BRANCH" \
+              --title "Add PostgreSQL major release track" \
+              --body "Adds newly published PostgreSQL major bookworm track(s) to release-tracks.json."
+          fi

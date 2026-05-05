@@ -11,8 +11,8 @@ const mockRuntime = [
   'export PATH=/tmp/bin:$PATH',
   'export PGDATA=/tmp/pg/18/docker',
   'export PG_BINARY_STASH_ROOT=/tmp/pg-binaries',
-  'export LOGGER_PATH=./scripts/lib/logger.sh',
-  'export WALG_LIB_PATH=./scripts/lib/walg.sh'
+  'export LOGGER_PATH=./image/lib/logger.sh',
+  'export WALG_LIB_PATH=./image/lib/walg.sh'
 ];
 
 describe('entrypoint contracts', () => {
@@ -29,7 +29,7 @@ describe('entrypoint contracts', () => {
   test('plain PostgreSQL startup delegates to the official entrypoint with shipped config', async () => {
     const result = await bash.run([
       ...mockRuntime,
-      'bash ./scripts/entrypoint.sh postgres'
+      'bash ./image/entrypoint.sh postgres'
     ].join('; '));
 
     expect(result.code).toBe(0);
@@ -42,7 +42,7 @@ describe('entrypoint contracts', () => {
       ...mockRuntime,
       'mkdir -p /tmp/pg/18/docker',
       'printf "18\\n" > /tmp/pg/18/docker/PG_VERSION',
-      'bash ./scripts/entrypoint.sh postgres'
+      'bash ./image/entrypoint.sh postgres'
     ].join('; '));
 
     expect(result.code).toBe(0);
@@ -54,7 +54,7 @@ describe('entrypoint contracts', () => {
       ...mockRuntime,
       'mkdir -p /tmp/pg/18/docker',
       'printf "17\\n" > /tmp/pg/18/docker/PG_VERSION',
-      'bash ./scripts/entrypoint.sh postgres'
+      'bash ./image/entrypoint.sh postgres'
     ].join('; '));
 
     expect(result.code).toBe(1);
@@ -70,7 +70,7 @@ describe('entrypoint contracts', () => {
       'printf "17\\n" > /tmp/pg/18/docker/PG_VERSION',
       'printf "%s\\n" "#!/usr/bin/env bash" "printf \\"upgrade:%s:%s:%s\\\\n\\" \\"\\$PG_OLD_MAJOR\\" \\"\\$PG_NEW_MAJOR\\" \\"\\$PGDATA\\"" "printf \\"18\\\\n\\" > \\"\\$PGDATA/PG_VERSION\\"" > /tmp/bin/upgrade-test.sh',
       'chmod +x /tmp/bin/upgrade-test.sh',
-      'PG_UPGRADE=true UPGRADE_SCRIPT_PATH=/tmp/bin/upgrade-test.sh bash ./scripts/entrypoint.sh postgres'
+      'PG_UPGRADE=true UPGRADE_SCRIPT_PATH=/tmp/bin/upgrade-test.sh bash ./image/entrypoint.sh postgres'
     ].join('; '));
 
     expect(result.code).toBe(0);
@@ -85,7 +85,7 @@ describe('entrypoint contracts', () => {
       'printf "17\\n" > /tmp/pg/18/docker/PG_VERSION',
       'printf "%s\\n" "#!/usr/bin/env bash" "exit 0" > /tmp/bin/upgrade-test.sh',
       'chmod +x /tmp/bin/upgrade-test.sh',
-      'PG_UPGRADE=true UPGRADE_SCRIPT_PATH=/tmp/bin/upgrade-test.sh bash ./scripts/entrypoint.sh postgres'
+      'PG_UPGRADE=true UPGRADE_SCRIPT_PATH=/tmp/bin/upgrade-test.sh bash ./image/entrypoint.sh postgres'
     ].join('; '));
 
     expect(result.code).toBe(1);
@@ -96,7 +96,7 @@ describe('entrypoint contracts', () => {
   test('stashes required PostgreSQL binaries', async () => {
     const result = await bash.run([
       ...mockRuntime,
-      'bash ./scripts/entrypoint.sh postgres >/tmp/entrypoint.out',
+      'bash ./image/entrypoint.sh postgres >/tmp/entrypoint.out',
       'test -x /tmp/pg-binaries/18/bin/postgres',
       'test -x /tmp/pg-binaries/18/bin/pg_upgrade',
       'test -x /tmp/pg-binaries/18/bin/pg_ctl',
@@ -112,10 +112,10 @@ describe('entrypoint contracts', () => {
   test('refreshes binary stash when same-major binaries change', async () => {
     const result = await bash.run([
       ...mockRuntime,
-      'bash ./scripts/entrypoint.sh postgres >/tmp/entrypoint-1.out',
+      'bash ./image/entrypoint.sh postgres >/tmp/entrypoint-1.out',
       'cp /tmp/pg-binaries/18/checksum /tmp/checksum-before',
       'printf "%s\\n" "# patched binary content" >> /tmp/bin/pg_dump',
-      'bash ./scripts/entrypoint.sh postgres >/tmp/entrypoint-2.out',
+      'bash ./image/entrypoint.sh postgres >/tmp/entrypoint-2.out',
       'test -s /tmp/pg-binaries/18/checksum',
       '! cmp -s /tmp/checksum-before /tmp/pg-binaries/18/checksum',
       'grep -q "patched binary content" /tmp/pg-binaries/18/bin/pg_dump'
@@ -127,7 +127,7 @@ describe('entrypoint contracts', () => {
   test('WAL-G prefix requires backup schedule', async () => {
     const result = await bash.run([
       ...mockRuntime,
-      'WALG_S3_PREFIX=s3://bucket/db bash ./scripts/entrypoint.sh postgres'
+      'WALG_S3_PREFIX=s3://bucket/db bash ./image/entrypoint.sh postgres'
     ].join('; '));
 
     expect(result.code).toBe(1);
@@ -138,7 +138,7 @@ describe('entrypoint contracts', () => {
   test('rejects invalid archive timeout before startup', async () => {
     const result = await bash.run([
       ...mockRuntime,
-      'WALG_S3_PREFIX=s3://bucket/db BACKUP_SCHEDULE="0 0 * * *" ARCHIVE_TIMEOUT=soon bash ./scripts/entrypoint.sh postgres'
+      'WALG_S3_PREFIX=s3://bucket/db BACKUP_SCHEDULE="0 0 * * *" ARCHIVE_TIMEOUT=soon bash ./image/entrypoint.sh postgres'
     ].join('; '));
 
     expect(result.code).toBe(1);
@@ -149,7 +149,7 @@ describe('entrypoint contracts', () => {
   test('rejects malformed backup schedule before startup', async () => {
     const result = await bash.run([
       ...mockRuntime,
-      'WALG_S3_PREFIX=s3://bucket/db BACKUP_SCHEDULE="0 0 *" bash ./scripts/entrypoint.sh postgres'
+      'WALG_S3_PREFIX=s3://bucket/db BACKUP_SCHEDULE="0 0 *" bash ./image/entrypoint.sh postgres'
     ].join('; '));
 
     expect(result.code).toBe(1);

@@ -2,9 +2,9 @@ import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { createBashRunner } from '../helpers/shell.js';
 
 const scriptEnv = [
-  'export LOGGER_PATH=/workspace/scripts/lib/logger.sh',
-  'export WALG_LIB_PATH=/workspace/scripts/lib/walg.sh',
-  'export RESTORE_ARGS_LIB_PATH=/workspace/scripts/lib/restore-args.sh',
+  'export LOGGER_PATH=/workspace/image/lib/logger.sh',
+  'export WALG_LIB_PATH=/workspace/image/lib/walg.sh',
+  'export RESTORE_ARGS_LIB_PATH=/workspace/image/lib/restore-args.sh',
   'export WALG_ENV_FILE=/tmp/walg-env.sh',
   'export PGDATA=/tmp/pg/18/docker',
   'export PATH=/tmp/bin:$PATH',
@@ -31,7 +31,7 @@ describe('restore script contracts', () => {
         ...scriptEnv,
         'mkdir -p "$PGDATA"',
         'printf "18\\n" > "$PGDATA/PG_VERSION"',
-        'RESTORE_REQUEST_ID=test-request bash /workspace/scripts/restore.sh'
+        'RESTORE_REQUEST_ID=test-request bash /workspace/image/restore.sh'
       ].join('; ')
     );
 
@@ -43,7 +43,7 @@ describe('restore script contracts', () => {
     const result = await bash.run(
       [
         ...scriptEnv,
-        'bash /workspace/scripts/restore.sh'
+        'bash /workspace/image/restore.sh'
       ].join('; ')
     );
 
@@ -58,7 +58,7 @@ describe('restore script contracts', () => {
         'mkdir -p "$PGDATA"',
         'printf "18\\n" > "$PGDATA/PG_VERSION"',
         'printf "old\\n" > "$PGDATA/sentinel"',
-        'RESTORE_REQUEST_ID=test-request RESTORE_OVERWRITE=true bash /workspace/scripts/restore.sh --target-time "2026-02-13 14:30:00 UTC"',
+        'RESTORE_REQUEST_ID=test-request RESTORE_OVERWRITE=true bash /workspace/image/restore.sh --target-time "2026-02-13 14:30:00 UTC"',
         'test -f /tmp/pg/18/pre-restore/sentinel',
         'test -f "$PGDATA/recovery.signal"',
         'test -f /tmp/pg/18/restore-state/test-request.completed',
@@ -74,7 +74,7 @@ describe('restore script contracts', () => {
     const result = await bash.run(
       [
         ...scriptEnv,
-        'RESTORE_REQUEST_ID=cross-instance bash /workspace/scripts/restore.sh --from s3://bucket/source/18',
+        'RESTORE_REQUEST_ID=cross-instance bash /workspace/image/restore.sh --from s3://bucket/source/18',
         'grep -q "WALG_S3_PREFIX=" "$PGDATA/postgresql.auto.conf"',
         'grep -q "s3://bucket/source/18" "$PGDATA/postgresql.auto.conf"'
       ].join('; ')
@@ -90,7 +90,7 @@ describe('restore script contracts', () => {
         'mkdir -p "$PGDATA" /tmp/pg/18/restore-state',
         'printf "18\\n" > "$PGDATA/PG_VERSION"',
         'printf "done\\n" > /tmp/pg/18/restore-state/test-request.completed',
-        'RESTORE_REQUEST_ID=test-request RESTORE_OVERWRITE=true bash /workspace/scripts/restore.sh'
+        'RESTORE_REQUEST_ID=test-request RESTORE_OVERWRITE=true bash /workspace/image/restore.sh'
       ].join('; ')
     );
 
@@ -105,7 +105,7 @@ describe('restore script contracts', () => {
         'mkdir -p "$PGDATA" /tmp/pg/18/pre-restore',
         'printf "current\\n" > "$PGDATA/sentinel"',
         'printf "previous\\n" > /tmp/pg/18/pre-restore/sentinel',
-        'RESTORE_REQUEST_ID=rollback-request RESTORE_ROLLBACK=true bash /workspace/scripts/restore.sh',
+        'RESTORE_REQUEST_ID=rollback-request RESTORE_ROLLBACK=true bash /workspace/image/restore.sh',
         'grep -q previous "$PGDATA/sentinel"',
         'grep -q current /tmp/pg/18/failed-restore/sentinel',
         'test -f /tmp/pg/18/restore-state/rollback-request.rollback-completed'
@@ -123,7 +123,7 @@ describe('restore script contracts', () => {
         'mkdir -p "$PGDATA" /tmp/pg/18/restore-state',
         'printf "18\\n" > "$PGDATA/PG_VERSION"',
         'printf "done\\n" > /tmp/pg/18/restore-state/rollback-request.rollback-completed',
-        'RESTORE_REQUEST_ID=rollback-request RESTORE_ROLLBACK=true bash /workspace/scripts/restore.sh'
+        'RESTORE_REQUEST_ID=rollback-request RESTORE_ROLLBACK=true bash /workspace/image/restore.sh'
       ].join('; ')
     );
 

@@ -13,7 +13,7 @@ Single-stage build. Extends the official `postgres:18` image, downloads the prec
 │  postgres:18 (Debian bookworm)  │
 │  ├─ apt: cron                   │
 │  ├─ WAL-G release binary        │
-│  ├─ COPY scripts/               │
+│  ├─ COPY image/               │
 │  ├─ COPY config/                │
 │  └─ ENTRYPOINT                  │
 └─────────────────────────────────┘
@@ -50,7 +50,7 @@ Copied artifacts:
 
 | Source | Destination | Purpose |
 |---|---|---|
-| `scripts/*` | `/usr/local/bin/` | Entrypoint, backup, restore, upgrade |
+| `image/*.sh` | `/usr/local/bin/` | Entrypoint, backup, restore, upgrade |
 | `config/postgresql.conf` | `/etc/postgresql/postgresql.conf` | Defaults with `include_dir = 'conf.d'` |
 | `config/pg_hba.conf` | `/etc/postgresql/pg_hba.conf` | Auth config |
 

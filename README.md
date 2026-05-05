@@ -33,7 +33,8 @@ The implemented single-primary workflows are covered by Bash contract tests plus
 ```text
 pg-phoenix-image/
 |-- Dockerfile
-|-- scripts/           # entrypoint, backup, restore, upgrade, shared Bash libs
+|-- image/             # runtime scripts and files copied into the Docker image
+|-- scripts/           # local and CI repository tooling
 |-- config/            # postgresql.conf, pg_hba.conf
 |-- tests/             # contract and Testcontainers suites
 `-- docs/

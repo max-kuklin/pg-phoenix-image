@@ -165,9 +165,11 @@ PostgreSQL minor updates are allowed to automerge only if the full test suite is
 
 ## Major Version Releases
 
-A new PostgreSQL major track is created deliberately:
+A new PostgreSQL major track is proposed automatically but merged deliberately. The `Release Tracks` workflow runs `scripts/update-release-tracks.js` on a weekly schedule and on manual dispatch. It reads Docker Hub's official `postgres` bookworm tags, finds majors newer than the highest entry in `release-tracks.json`, resolves the tag digest, and opens a PR adding the new manifest entry.
 
-1. Add a new manifest entry for the new `postgres:<major>.<minor>-bookworm` base.
+The workflow does not publish images and does not merge its own PR. A new PostgreSQL major changes the supported upgrade surface, so the PR is only the starting point for review:
+
+1. Review the generated manifest entry for the new `postgres:<major>.<minor>-bookworm` base.
 2. Confirm WAL-G supports the target PostgreSQL major.
 3. Confirm the old and new official PostgreSQL images use compatible Debian releases for the binary stash approach.
 4. Run the full test suite with `PG_TEST_OLD=<old>` and `PG_TEST_NEW=<new>`.

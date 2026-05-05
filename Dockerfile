@@ -27,16 +27,16 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*
 
 # Logging library
-COPY scripts/lib/logger.sh /usr/local/lib/logger.sh
-COPY scripts/lib/walg.sh /usr/local/lib/walg.sh
-COPY scripts/lib/restore-args.sh /usr/local/lib/restore-args.sh
+COPY image/lib/logger.sh /usr/local/lib/logger.sh
+COPY image/lib/walg.sh /usr/local/lib/walg.sh
+COPY image/lib/restore-args.sh /usr/local/lib/restore-args.sh
 
 # Scripts
-COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
-COPY scripts/backup.sh     /usr/local/bin/backup.sh
-COPY scripts/restore.sh    /usr/local/bin/restore.sh
-COPY scripts/upgrade.sh    /usr/local/bin/upgrade.sh
-COPY scripts/docker-entrypoint-initdb.d/ /docker-entrypoint-initdb.d/
+COPY image/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY image/backup.sh     /usr/local/bin/backup.sh
+COPY image/restore.sh    /usr/local/bin/restore.sh
+COPY image/upgrade.sh    /usr/local/bin/upgrade.sh
+COPY image/docker-entrypoint-initdb.d/ /docker-entrypoint-initdb.d/
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/backup.sh \
              /usr/local/bin/restore.sh /usr/local/bin/upgrade.sh
 

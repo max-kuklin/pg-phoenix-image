@@ -1,6 +1,6 @@
 # Must Follow Rules
 - Do not edit code files unless explicitly asked to
-- Use modern vanilla JavaScript ES2025 `.js` for tests and Bash `.sh` for scripts
+- Use modern vanilla JavaScript ES2025 `.js` for tests and repo tooling; use Bash `.sh` only for image runtime scripts
 - Simplisity and readability are paramount — avoid complex constructs, prefer clarity over cleverness
 
 # When writing documentation
@@ -10,7 +10,7 @@ Never include full code snippets in documentation, instead provide high-level ov
 - Update documentation files when code changes are made, ensuring consistency between code and docs
 
 ## Logging in scripts
-All scripts source `scripts/lib/logger.sh` (installed to `/usr/local/lib/logger.sh` in the container). Use `log_info`, `log_warn`, `log_error`, `log_debug`, `log_fatal` (error + exit 1), `log_phase` (section markers). Set `LOG_COMPONENT` before sourcing to tag output. Output goes to stderr — stdout is reserved for data pipes. All scripts use `#!/usr/bin/env bash` with `set -euo pipefail`. Prefer `[[ ]]`, arrays, and `${var//pat/rep}` over spawning subprocesses
+Image runtime scripts source `image/lib/logger.sh` (installed to `/usr/local/lib/logger.sh` in the container). Use `log_info`, `log_warn`, `log_error`, `log_debug`, `log_fatal` (error + exit 1), `log_phase` (section markers). Set `LOG_COMPONENT` before sourcing to tag output. Output goes to stderr — stdout is reserved for data pipes. Image runtime scripts use `#!/usr/bin/env bash` with `set -euo pipefail`. Prefer `[[ ]]`, arrays, and `${var//pat/rep}` over spawning subprocesses
 
 ## Tests
 `npm test` — `.test.js` files in `tests/`. Vitest + Testcontainers — spins up pg-phoenix-image + SeaweedFS containers programmatically. Tests real PG behavior, WAL-G, backup/restore flows. No Compose files.

@@ -17,7 +17,7 @@ describe('script stubs contract', () => {
       'mkdir -p /tmp/bin',
       'printf "%s\\n" "#!/usr/bin/env bash" "exit 1" > /tmp/bin/pg_isready',
       'chmod +x /tmp/bin/pg_isready',
-      'PATH=/tmp/bin:$PATH LOGGER_PATH=./scripts/lib/logger.sh bash ./scripts/backup.sh'
+      'PATH=/tmp/bin:$PATH LOGGER_PATH=./image/lib/logger.sh bash ./image/backup.sh'
     ].join('; '));
 
     expect(result.code).toBe(0);
@@ -27,7 +27,7 @@ describe('script stubs contract', () => {
 
   test('restore rejects bad arguments through logger', async () => {
     const result = await bash.run(
-      'LOGGER_PATH=./scripts/lib/logger.sh WALG_LIB_PATH=./scripts/lib/walg.sh RESTORE_ARGS_LIB_PATH=./scripts/lib/restore-args.sh bash ./scripts/restore.sh --bad'
+      'LOGGER_PATH=./image/lib/logger.sh WALG_LIB_PATH=./image/lib/walg.sh RESTORE_ARGS_LIB_PATH=./image/lib/restore-args.sh bash ./image/restore.sh --bad'
     );
 
     expect(result.code).toBe(1);
@@ -36,7 +36,7 @@ describe('script stubs contract', () => {
   });
 
   test('upgrade preflight requires entrypoint-provided environment', async () => {
-    const result = await bash.run('LOGGER_PATH=./scripts/lib/logger.sh WALG_LIB_PATH=./scripts/lib/walg.sh bash ./scripts/upgrade.sh');
+    const result = await bash.run('LOGGER_PATH=./image/lib/logger.sh WALG_LIB_PATH=./image/lib/walg.sh bash ./image/upgrade.sh');
 
     expect(result.code).toBe(1);
     expect(result.stdout).toBe('');
@@ -47,7 +47,7 @@ describe('script stubs contract', () => {
     const result = await bash.run([
       'mkdir -p /tmp/pg/18/docker',
       'printf "18\\n" > /tmp/pg/18/docker/PG_VERSION',
-      'LOGGER_PATH=./scripts/lib/logger.sh WALG_LIB_PATH=./scripts/lib/walg.sh PG_OLD_MAJOR=17 PG_NEW_MAJOR=18 PGDATA=/tmp/pg/18/docker PG_UPGRADE_BACKUP_MAX_AGE=soon bash ./scripts/upgrade.sh'
+      'LOGGER_PATH=./image/lib/logger.sh WALG_LIB_PATH=./image/lib/walg.sh PG_OLD_MAJOR=17 PG_NEW_MAJOR=18 PGDATA=/tmp/pg/18/docker PG_UPGRADE_BACKUP_MAX_AGE=soon bash ./image/upgrade.sh'
     ].join('; '));
 
     expect(result.code).toBe(1);
@@ -60,7 +60,7 @@ describe('script stubs contract', () => {
       'mkdir -p /tmp/pg/18/docker',
       'printf "18\\n" > /tmp/pg/18/docker/PG_VERSION',
       'rm -rf /tmp/pg-binaries',
-      'LOGGER_PATH=./scripts/lib/logger.sh WALG_LIB_PATH=./scripts/lib/walg.sh PG_OLD_MAJOR=17 PG_NEW_MAJOR=18 PGDATA=/tmp/pg/18/docker PG_BINARY_STASH_ROOT=/tmp/pg-binaries bash ./scripts/upgrade.sh'
+      'LOGGER_PATH=./image/lib/logger.sh WALG_LIB_PATH=./image/lib/walg.sh PG_OLD_MAJOR=17 PG_NEW_MAJOR=18 PGDATA=/tmp/pg/18/docker PG_BINARY_STASH_ROOT=/tmp/pg-binaries bash ./image/upgrade.sh'
     ].join('; '));
 
     expect(result.code).toBe(1);
@@ -83,7 +83,7 @@ describe('script stubs contract', () => {
       'printf "%s\\n" "#!/usr/bin/env bash" "exit 0" > /tmp/bin/vacuumdb',
       'printf "%s\\n" "#!/usr/bin/env bash" "if [[ \\"\\$1\\" == backup-list ]]; then date -u +\\"backup_name last_modified\\nbase_1 %Y-%m-%dT%H:%M:%SZ\\"; exit 0; fi" "if [[ \\"\\$1\\" == backup-push ]]; then exit 0; fi" "exit 1" > /tmp/bin/wal-g',
       'chmod +x /tmp/bin/postgres /tmp/bin/initdb /tmp/bin/pg_upgrade /tmp/bin/pg_ctl /tmp/bin/vacuumdb /tmp/bin/wal-g',
-      'PATH=/tmp/bin:$PATH LOGGER_PATH=./scripts/lib/logger.sh WALG_LIB_PATH=./scripts/lib/walg.sh PG_OLD_MAJOR=17 PG_NEW_MAJOR=18 PGDATA=/tmp/pg/18/docker PG_BINARY_STASH_ROOT=/tmp/pg-binaries WALG_S3_PREFIX=s3://bucket/db WALG_ENV_FILE=/tmp/walg-env.sh bash ./scripts/upgrade.sh'
+      'PATH=/tmp/bin:$PATH LOGGER_PATH=./image/lib/logger.sh WALG_LIB_PATH=./image/lib/walg.sh PG_OLD_MAJOR=17 PG_NEW_MAJOR=18 PGDATA=/tmp/pg/18/docker PG_BINARY_STASH_ROOT=/tmp/pg-binaries WALG_S3_PREFIX=s3://bucket/db WALG_ENV_FILE=/tmp/walg-env.sh bash ./image/upgrade.sh'
     ].join('; '));
 
     expect(result.code).toBe(0);
