@@ -155,8 +155,8 @@ jobs:
           echo "upgrade_pairs=$upgrade_pairs" >> "$GITHUB_OUTPUT"
           echo "moving_tags=$moving_tags" >> "$GITHUB_OUTPUT"
 
-  build-test-push-immutable:
-    name: Build, test, publish immutable (${{ matrix.major }})
+  build-test-stage:
+    name: Build, test, stage image (${{ matrix.major }})
     needs: plan
     if: needs.plan.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
@@ -170,6 +170,7 @@ jobs:
     env:
       REGISTRY_IMAGE: ghcr.io/${{ github.repository }}
       LOCAL_IMAGE: pg-phoenix-image:publish-${{ matrix.major }}
+      STAGING_TAG: ci-${{ needs.plan.outputs.release_tag }}-${{ matrix.major }}-${{ github.run_id }}-${{ github.run_attempt }}
       RELEASE_TAG: ${{ needs.plan.outputs.release_tag }}
       RELEASE_SHA: ${{ needs.plan.outputs.release_sha }}
       DRY_RUN: ${{ inputs.dry_run || false }}
@@ -244,53 +245,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      - name: Push immutable tags
+      - name: Push staging tag
         if: env.DRY_RUN != 'true'
-        env:
-          IMMUTABLE_TAGS: ${{ toJson(matrix.tags.immutable) }}
-          EXPECTED_VERSION: ${{ needs.plan.outputs.release_tag }}
-          EXPECTED_REVISION: ${{ needs.plan.outputs.release_sha }}
-          EXPECTED_BASE: ${{ matrix.base }}
-          EXPECTED_MAJOR: ${{ matrix.major }}
-          EXPECTED_MINOR: ${{ matrix.minor }}
         run: |
           set -euo pipefail
 
-          verify_existing_image() {
-            local image="$1"
-            local labels
-
-            labels="$(docker buildx imagetools inspect "$image" --format '{{ json .Config.Labels }}')"
-
-            jq -e \
-              --arg version "$EXPECTED_VERSION" \
-              --arg revision "$EXPECTED_REVISION" \
-              --arg base "$EXPECTED_BASE" \
-              --arg major "$EXPECTED_MAJOR" \
-              --arg minor "$EXPECTED_MINOR" \
-              '
-                ."org.opencontainers.image.version" == $version and
-                ."org.opencontainers.image.revision" == $revision and
-                ."org.pg-phoenix.postgres.base" == $base and
-                ."org.pg-phoenix.postgres.major" == $major and
-                ."org.pg-phoenix.postgres.minor" == $minor
-              ' <<< "$labels" >/dev/null
-          }
-
-          jq -r '.[]' <<< "$IMMUTABLE_TAGS" | while read -r tag; do
-            if docker manifest inspect "$REGISTRY_IMAGE:$tag" >/dev/null 2>&1; then
-              if verify_existing_image "$REGISTRY_IMAGE:$tag"; then
-                echo "Immutable tag already exists with matching metadata: $REGISTRY_IMAGE:$tag"
-                continue
-              fi
-
-              echo "Immutable tag already exists with different metadata: $REGISTRY_IMAGE:$tag" >&2
-              exit 1
-            fi
-
-            docker tag "$LOCAL_IMAGE" "$REGISTRY_IMAGE:$tag"
-            docker push "$REGISTRY_IMAGE:$tag"
-          done
+          docker tag "$LOCAL_IMAGE" "$REGISTRY_IMAGE:$STAGING_TAG"
+          docker push "$REGISTRY_IMAGE:$STAGING_TAG"
 
   upgrade-tests:
     name: Upgrade test (${{ matrix.oldMajor }} -> ${{ matrix.newMajor }})
@@ -369,18 +330,21 @@ jobs:
           PG_PHOENIX_NEW_IMAGE: ${{ env.NEW_IMAGE }}
         run: npm run test:upgrade
 
-  publish-moving:
-    name: Publish moving tags
+  promote-images:
+    name: Promote staged images
     needs:
       - plan
-      - build-test-push-immutable
+      - build-test-stage
       - upgrade-tests
-    if: always() && needs.plan.outputs.should_publish == 'true' && needs.build-test-push-immutable.result == 'success' && (needs.upgrade-tests.result == 'success' || needs.upgrade-tests.result == 'skipped') && (inputs.publish_moving_tags || github.event_name != 'workflow_dispatch') && !inputs.dry_run
+    if: always() && needs.plan.outputs.should_publish == 'true' && needs.build-test-stage.result == 'success' && (needs.upgrade-tests.result == 'success' || needs.upgrade-tests.result == 'skipped') && inputs.dry_run != true
     runs-on: ubuntu-latest
 
     env:
       REGISTRY_IMAGE: ghcr.io/${{ github.repository }}
-      MOVING_TAGS: ${{ needs.plan.outputs.moving_tags }}
+      IMAGES: ${{ needs.plan.outputs.images }}
+      RELEASE_TAG: ${{ needs.plan.outputs.release_tag }}
+      RELEASE_SHA: ${{ needs.plan.outputs.release_sha }}
+      PUBLISH_MOVING_TAGS: ${{ inputs.publish_moving_tags || github.event_name != 'workflow_dispatch' }}
 
     steps:
       - name: Log in to GitHub Container Registry
@@ -390,27 +354,159 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      - name: Update moving tags from immutable tags
+      - name: Promote staging tags
         run: |
           set -euo pipefail
 
-          jq -c '.[]' <<< "$MOVING_TAGS" | while read -r image; do
-            source_tag="$(jq -r '.immutable[0]' <<< "$image")"
+          verify_existing_image() {
+            local image="$1"
+            local expected_base="$2"
+            local expected_major="$3"
+            local expected_minor="$4"
+            local labels
 
-            jq -r '.moving[]' <<< "$image" | while read -r moving_tag; do
-              docker buildx imagetools create \
-                --tag "$REGISTRY_IMAGE:$moving_tag" \
-                "$REGISTRY_IMAGE:$source_tag"
+            labels="$(docker buildx imagetools inspect "$image" --format '{{ json .Config.Labels }}')"
+
+            jq -e \
+              --arg version "$RELEASE_TAG" \
+              --arg revision "$RELEASE_SHA" \
+              --arg base "$expected_base" \
+              --arg major "$expected_major" \
+              --arg minor "$expected_minor" \
+              '
+                ."org.opencontainers.image.version" == $version and
+                ."org.opencontainers.image.revision" == $revision and
+                ."org.pg-phoenix.postgres.base" == $base and
+                ."org.pg-phoenix.postgres.major" == $major and
+                ."org.pg-phoenix.postgres.minor" == $minor
+              ' <<< "$labels" >/dev/null
+          }
+
+          add_new_immutable_tag() {
+            local target="$1"
+            local expected_base="$2"
+            local expected_major="$3"
+            local expected_minor="$4"
+
+            if docker manifest inspect "$REGISTRY_IMAGE:$target" >/dev/null 2>&1; then
+              if verify_existing_image "$REGISTRY_IMAGE:$target" "$expected_base" "$expected_major" "$expected_minor"; then
+                echo "Tag already exists with matching metadata: $REGISTRY_IMAGE:$target"
+                return 0
+              fi
+
+              echo "Tag already exists with different metadata: $REGISTRY_IMAGE:$target" >&2
+              exit 1
+            fi
+
+            public_tags+=(--tag "$REGISTRY_IMAGE:$target")
+          }
+
+          jq -c '.[]' <<< "$IMAGES" | while read -r image; do
+            major="$(jq -r '.major' <<< "$image")"
+            minor="$(jq -r '.minor' <<< "$image")"
+            base="$(jq -r '.base' <<< "$image")"
+            staging_tag="ci-$RELEASE_TAG-$major-${{ github.run_id }}-${{ github.run_attempt }}"
+            source="$REGISTRY_IMAGE:$staging_tag"
+            public_tags=()
+
+            mapfile -t immutable_tags < <(jq -r '.tags.immutable[]' <<< "$image")
+            for immutable_tag in "${immutable_tags[@]}"; do
+              add_new_immutable_tag "$immutable_tag" "$base" "$major" "$minor"
             done
+
+            if [[ "$PUBLISH_MOVING_TAGS" == "true" ]]; then
+              mapfile -t moving_tags < <(jq -r '.tags.moving[]' <<< "$image")
+              for moving_tag in "${moving_tags[@]}"; do
+                public_tags+=(--tag "$REGISTRY_IMAGE:$moving_tag")
+              done
+            fi
+
+            if [[ "${#public_tags[@]}" -gt 0 ]]; then
+              docker buildx imagetools create "${public_tags[@]}" "$source"
+            fi
+          done
+
+  cleanup-staging:
+    name: Cleanup staging tags
+    needs:
+      - plan
+      - build-test-stage
+      - upgrade-tests
+      - promote-images
+    if: always() && needs.plan.outputs.should_publish == 'true' && inputs.dry_run != true
+    runs-on: ubuntu-latest
+
+    env:
+      REGISTRY_IMAGE: ghcr.io/${{ github.repository }}
+      IMAGES: ${{ needs.plan.outputs.images }}
+      RELEASE_TAG: ${{ needs.plan.outputs.release_tag }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Delete staging package versions
+        run: |
+          set -euo pipefail
+
+          owner="${GITHUB_REPOSITORY_OWNER}"
+          package="${GITHUB_REPOSITORY#*/}"
+
+          package_api() {
+            local path="$1"
+
+            if gh api -H "Accept: application/vnd.github+json" "/users/$owner/packages/container/$package/$path" >/tmp/package-api.out 2>/tmp/package-api.err; then
+              printf '/users/%s/packages/container/%s/%s\n' "$owner" "$package" "$path"
+              return 0
+            fi
+
+            if gh api -H "Accept: application/vnd.github+json" "/orgs/$owner/packages/container/$package/$path" >/tmp/package-api.out 2>/tmp/package-api.err; then
+              printf '/orgs/%s/packages/container/%s/%s\n' "$owner" "$package" "$path"
+              return 0
+            fi
+
+            cat /tmp/package-api.err >&2
+            return 1
+          }
+
+          delete_staging_tag() {
+            local tag="$1"
+            local versions_path
+            local version_id
+
+            versions_path="$(package_api versions)"
+            version_id="$(
+              gh api \
+                -H "Accept: application/vnd.github+json" \
+                "$versions_path" \
+                --paginate \
+                --jq ".[] | select(.metadata.container.tags[]? == \"$tag\") | .id" \
+                | head -n 1
+            )"
+
+            if [[ -z "$version_id" ]]; then
+              echo "No staging package version found for $tag"
+              return 0
+            fi
+
+            echo "Deleting staging package version $version_id for $tag"
+            gh api \
+              --method DELETE \
+              -H "Accept: application/vnd.github+json" \
+              "${versions_path%/versions}/versions/$version_id"
+          }
+
+          jq -c '.[]' <<< "$IMAGES" | while read -r image; do
+            major="$(jq -r '.major' <<< "$image")"
+            delete_staging_tag "ci-$RELEASE_TAG-$major-${{ github.run_id }}-${{ github.run_attempt }}"
           done
 
   summary:
     name: Publish summary
     needs:
       - plan
-      - build-test-push-immutable
+      - build-test-stage
       - upgrade-tests
-      - publish-moving
+      - promote-images
+      - cleanup-staging
     if: always() && needs.plan.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
 

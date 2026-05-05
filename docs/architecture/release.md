@@ -70,7 +70,7 @@ The direct call from `release.yml` is required because GitHub does not trigger f
 
 Triggered by a published GitHub release such as `v0.4.0`.
 
-The reusable publisher builds every selected PostgreSQL track from the release tag source, tests the exact local images, pushes immutable tags first, then updates moving tags. A normal project release publishes all supported tracks unless an operator intentionally selects a subset.
+The reusable publisher builds every selected PostgreSQL track from the release tag source and tests the exact local images. Passing image jobs push only run-scoped staging tags. After every selected image and required adjacent upgrade test passes, one promotion job tags each staged image with its immutable and moving public tags. If the run fails before promotion, cleanup removes the staging tags and no public release tags are left behind.
 
 The same publisher can be dispatched manually for repair or dry-run validation. Manual inputs select the project release tag, track list, whether moving tags should update, and whether pushes should be skipped.
 
@@ -118,8 +118,8 @@ Do not claim support for skipped major upgrades such as `14 -> 18` unless they a
 
 - The publish workflow must test the exact local image before pushing it.
 - The publish workflow must not rebuild after tests.
-- Immutable tags must be pushed before moving tags.
-- Moving tags should update only after the corresponding immutable tag exists.
+- Public immutable and moving tags must be promoted only after every selected image and required upgrade test passes.
+- Failed publish runs must leave at most run-scoped staging tags, which cleanup removes.
 - A selected publish set should update moving tags only after every selected track passes.
 - Every pushed digest must be written to the workflow summary.
 - PostgreSQL refresh publishing must use release-tag harness files plus current `release-tracks.json`.
