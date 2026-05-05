@@ -13,7 +13,7 @@
   },
   "devDependencies": {
     "testcontainers": "^11.7.0",
-    "vitest": "^3.2.4"
+    "vitest": "^4.0.0"
   },
   "dependencies": {
     "pg": "^8.16.3"
