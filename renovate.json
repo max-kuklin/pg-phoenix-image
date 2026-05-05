@@ -6,8 +6,8 @@
   "customManagers": [
     {
       "customType": "regex",
-      "fileMatch": [
-        "(^|/)release-tracks\\.json$"
+      "managerFilePatterns": [
+        "/(^|/)release-tracks\\.json$/"
       ],
       "matchStrings": [
         "\"base\"\\s*:\\s*\"postgres:(?<currentValue>[^\"]+?)@(?<currentDigest>sha256:[a-f0-9]+)\""
@@ -18,8 +18,8 @@
     },
     {
       "customType": "regex",
-      "fileMatch": [
-        "(^|/)Dockerfile$"
+      "managerFilePatterns": [
+        "/(^|/)Dockerfile$/"
       ],
       "matchStrings": [
         "ARG WALG_VERSION=(?<currentValue>v[\\d.]+)"
