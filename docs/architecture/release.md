@@ -70,7 +70,7 @@ The direct call from `release.yml` is required because GitHub does not trigger f
 
 Triggered by a published GitHub release such as `v0.4.0`.
 
-The reusable publisher builds every selected PostgreSQL track from the release tag source and tests the exact local images. Passing image jobs push only run-scoped staging tags. After every selected image and required adjacent upgrade test passes, one promotion job tags each staged image with its immutable and moving public tags. If the run fails before promotion, cleanup removes the staging tags and no public release tags are left behind.
+The reusable publisher builds every selected PostgreSQL track from the release tag source and tests the exact local images. Passing image jobs push only run-scoped tags to the staging package. After every selected image and required adjacent upgrade test passes, one promotion job tags each staged image into the public package with its immutable and moving tags. If the run fails before promotion, cleanup removes the staging package versions and no public release tags are left behind.
 
 The same publisher can be dispatched manually for repair or dry-run validation. Manual inputs select the project release tag, track list, whether moving tags should update, and whether pushes should be skipped.
 

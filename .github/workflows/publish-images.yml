@@ -169,6 +169,7 @@ jobs:
 
     env:
       REGISTRY_IMAGE: ghcr.io/${{ github.repository }}
+      STAGING_IMAGE: ghcr.io/${{ github.repository }}-staging
       LOCAL_IMAGE: pg-phoenix-image:publish-${{ matrix.major }}
       STAGING_TAG: ci-${{ needs.plan.outputs.release_tag }}-${{ matrix.major }}-${{ github.run_id }}-${{ github.run_attempt }}
       RELEASE_TAG: ${{ needs.plan.outputs.release_tag }}
@@ -250,8 +251,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          docker tag "$LOCAL_IMAGE" "$REGISTRY_IMAGE:$STAGING_TAG"
-          docker push "$REGISTRY_IMAGE:$STAGING_TAG"
+          docker tag "$LOCAL_IMAGE" "$STAGING_IMAGE:$STAGING_TAG"
+          docker push "$STAGING_IMAGE:$STAGING_TAG"
 
   upgrade-tests:
     name: Upgrade test (${{ matrix.oldMajor }} -> ${{ matrix.newMajor }})
@@ -341,6 +342,7 @@ jobs:
 
     env:
       REGISTRY_IMAGE: ghcr.io/${{ github.repository }}
+      STAGING_IMAGE: ghcr.io/${{ github.repository }}-staging
       IMAGES: ${{ needs.plan.outputs.images }}
       RELEASE_TAG: ${{ needs.plan.outputs.release_tag }}
       RELEASE_SHA: ${{ needs.plan.outputs.release_sha }}
@@ -416,7 +418,7 @@ jobs:
             minor="$(jq -r '.minor' <<< "$image")"
             base="$(jq -r '.base' <<< "$image")"
             staging_tag="ci-$RELEASE_TAG-$major-${{ github.run_id }}-${{ github.run_attempt }}"
-            source="$REGISTRY_IMAGE:$staging_tag"
+            source="$STAGING_IMAGE:$staging_tag"
             public_tags=()
 
             mapfile -t immutable_tags < <(jq -r '.tags.immutable[]' <<< "$image")
@@ -447,7 +449,6 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      REGISTRY_IMAGE: ghcr.io/${{ github.repository }}
       IMAGES: ${{ needs.plan.outputs.images }}
       RELEASE_TAG: ${{ needs.plan.outputs.release_tag }}
       GH_TOKEN: ${{ github.token }}
@@ -458,7 +459,7 @@ jobs:
           set -euo pipefail
 
           owner="${GITHUB_REPOSITORY_OWNER}"
-          package="${GITHUB_REPOSITORY#*/}"
+          package="${GITHUB_REPOSITORY#*/}-staging"
 
           package_api() {
             local path="$1"
