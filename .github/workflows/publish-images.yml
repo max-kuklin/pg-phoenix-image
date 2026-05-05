@@ -156,7 +156,7 @@ jobs:
           echo "moving_tags=$moving_tags" >> "$GITHUB_OUTPUT"
 
   build-test-stage:
-    name: Build, test, stage image (${{ matrix.major }})
+    name: Build, test, candidate image (${{ matrix.major }})
     needs: plan
     if: needs.plan.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
@@ -331,7 +331,7 @@ jobs:
         run: npm run test:upgrade
 
   promote-images:
-    name: Promote staged images
+    name: Promote candidate images
     needs:
       - plan
       - build-test-stage
