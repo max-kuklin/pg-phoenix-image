@@ -8,7 +8,7 @@
     {
       "major": "15",
       "minor": "15.17",
-      "base": "postgres:15.17-bookworm@sha256:ec39d4feafe8cb1c6ae4b19773e763e35a430449e107c00dc2aeca434a886cc0"
+      "base": "postgres:15.18-bookworm@sha256:a49750f29944374435e1350b49c010076540f020cf50db8eaba30b7d670e8d12"
     },
     {
       "major": "16",
