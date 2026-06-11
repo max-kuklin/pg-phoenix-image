@@ -4,7 +4,7 @@
 
 # Pin base image digest for reproducible builds. Release builds override this
 # from release-tracks.json for each supported PostgreSQL major.
-ARG PG_BASE=postgres:18.4-bookworm@sha256:501c9112cb737119b90618d7c09ad4eaab243e4b370050eb280061284cd2ed63
+ARG PG_BASE=postgres:18.4-bookworm@sha256:efef99e1558f86089bc84bece29208c0777a185ff717ec7fa288a652ce2d0adf
 FROM ${PG_BASE}
 
 ARG PG_BASE
