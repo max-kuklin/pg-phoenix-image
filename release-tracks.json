@@ -3,7 +3,7 @@
     {
       "major": "14",
       "minor": "14.22",
-      "base": "postgres:14.23-bookworm@sha256:0f6632181f179c2d165df5120234175a550bec1b83cbb7ad581937abf68978be"
+      "base": "postgres:14.23-bookworm@sha256:41bb6f7fbd3f2131af9cc4eed0678e4cf03b8d8d8f2b8e07396816f006732ea3"
     },
     {
       "major": "15",
