@@ -82,7 +82,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v6.1.0
         with:
           ref: ${{ inputs.track_ref }}
           fetch-depth: 0
@@ -177,13 +177,13 @@ jobs:
 
     steps:
       - name: Check out project release
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v6.1.0
         with:
           ref: ${{ needs.plan.outputs.release_tag }}
           path: harness
 
       - name: Check out current track manifest
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v6.1.0
         with:
           ref: ${{ inputs.track_ref }}
           path: track-source
@@ -273,13 +273,13 @@ jobs:
 
     steps:
       - name: Check out project release
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v6.1.0
         with:
           ref: ${{ needs.plan.outputs.release_tag }}
           path: harness
 
       - name: Check out current track manifest
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v6.1.0
         with:
           ref: ${{ inputs.track_ref }}
           path: track-source
