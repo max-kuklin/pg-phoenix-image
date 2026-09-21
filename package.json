@@ -12,8 +12,8 @@
     "test:report": "node scripts/test-report.js"
   },
   "devDependencies": {
-    "testcontainers": "^11.7.0",
-    "vitest": "^4.0.0"
+    "testcontainers": "^12.1.0",
+    "vitest": "^5.0.0"
   },
   "dependencies": {
     "pg": "^8.16.3"
